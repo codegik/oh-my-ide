@@ -14,10 +14,12 @@ describe('Db', () => {
     db.close();
   });
 
-  it('a new track starts ON_ME with the default rule', () => {
+  it('a new track starts PARKED with the default rule', () => {
+    // A brand-new track has no signal yet, and a court that everything starts
+    // in cannot also be the one that means "act now".
     const db = fresh();
     const t = db.createTrack({ title: 'payment timeouts', question: 'why so slow?' });
-    expect(t.court).toBe('ON_ME');
+    expect(t.court).toBe('PARKED');
     expect(t.courtRule).toBe('default');
     db.close();
   });
@@ -250,6 +252,21 @@ describe('Db', () => {
     // And an unrelated patch still goes through.
     db.updateTrack(t.id, { title: 'y' });
     expect(db.getTrack(t.id)?.title).toBe('y');
+    db.close();
+  });
+
+  it('reopening a finished track puts it back in the open list', () => {
+    // closed_at is what the open-list query filters on, so finishing and then
+    // reopening has to clear it — otherwise the track is in neither list.
+    const db = fresh();
+    const t = db.createTrack({ title: 'x' });
+    db.updateTrack(t.id, { lifecycle: 'done' });
+    expect(db.listTracks().map((r) => r.id)).not.toContain(t.id);
+    expect(db.getTrack(t.id)?.lifecycle).toBe('done');
+
+    db.updateTrack(t.id, { lifecycle: 'open' });
+    expect(db.listTracks().map((r) => r.id)).toContain(t.id);
+    expect(db.getTrack(t.id)?.lifecycle).toBe('open');
     db.close();
   });
 

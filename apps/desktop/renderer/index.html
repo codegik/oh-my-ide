@@ -38,6 +38,17 @@
   .group { margin-top:10px; }
   .ghead { display:flex; justify-content:space-between; padding:3px 12px; color:var(--dim);
            font-size:var(--fs-xs); letter-spacing:.8px; }
+  /* One flat list: a count, and how much of it is actually asking for you. */
+  .railhead { display:flex; justify-content:space-between; padding:8px 12px 3px;
+              color:var(--dim); font-size:var(--fs-xs); letter-spacing:.8px; }
+  .railhead .needs { color:var(--ON_ME); }
+  /* The other half of a binary status, kept out of the way until asked for. */
+  .donehead { display:flex; align-items:center; gap:8px; margin-top:14px; padding:6px 12px;
+              color:var(--dim); font-size:var(--fs-xs); letter-spacing:.8px; cursor:pointer;
+              border-top:1px solid var(--line); }
+  .donehead:hover { color:var(--text); }
+  .donehead .caret { width:8px; flex:none; }
+  .donehead .tago { margin-left:auto; }
   .titem { display:flex; align-items:center; gap:8px; padding:6px 12px; cursor:pointer; }
   .titem:hover { background:#1a1e29; }
   .titem.sel { background:#1d2230; }
@@ -55,6 +66,9 @@
            cursor:pointer; background:#1d2230; }
   .court.ON_ME{color:var(--ON_ME)} .court.ON_CLAUDE{color:var(--ON_CLAUDE)}
   .court.ON_THEM{color:var(--ON_THEM)} .court.ON_SYSTEM{color:var(--ON_SYSTEM)}
+  .fin { flex:none; align-self:center; background:transparent; color:var(--dim); border:1px solid var(--line);
+         border-radius:5px; padding:3px 11px; cursor:pointer; font:inherit; font-size:var(--fs-xs); }
+  .fin:hover { color:var(--text); border-color:var(--dim); }
   .folder { flex:1; min-width:0; font-size:var(--fs-xs); color:var(--dim); cursor:pointer;
             overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .folder:hover { color:var(--text); }

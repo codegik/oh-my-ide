@@ -28,9 +28,11 @@ const track = (over: Partial<TrackSnapshot> = {}): TrackSnapshot => ({
 });
 
 describe('derive', () => {
-  it('an open loop with no signal is yours', () => {
+  it('an open loop with no signal is asking for nobody', () => {
+    // Not ON_ME: a court everything falls into by default cannot also be the
+    // court that means "act now". Staleness, not silence, is what reclaims one.
     const d = derive(track(), NOW);
-    expect(d.court).toBe('ON_ME');
+    expect(d.court).toBe('PARKED');
     expect(d.rule).toBe('default');
   });
 
@@ -116,11 +118,21 @@ describe('effective', () => {
 
   it('a park holds until its wake time, then releases', () => {
     const parked = track({ pin: pin({ kind: 'park' }), snoozeUntil: NOW + 1000 });
-    expect(effective(parked, NOW).court).toBe('PARKED');
+    const held = effective(parked, NOW);
+    expect(held.court).toBe('PARKED');
+    expect(held.source).toBe('park');
 
-    const awake = track({ pin: pin({ kind: 'park' }), snoozeUntil: NOW - 1 });
+    // `source`, not the court, is what says a park is still holding: a woken
+    // track with no signal derives PARKED too, and the two are not the same
+    // thing — one is a decision, the other is just quiet.
+    const awake = track({
+      pin: pin({ kind: 'park' }),
+      snoozeUntil: NOW - 1,
+      refs: [ref({ state: 'WORKING' })],
+    });
     const e = effective(awake, NOW);
-    expect(e.court).not.toBe('PARKED');
+    expect(e.source).toBe('derived');
+    expect(e.court).toBe('ON_CLAUDE');
     expect(e.released?.reason).toBe('wake_condition_met');
   });
 

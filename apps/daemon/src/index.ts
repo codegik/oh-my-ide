@@ -146,6 +146,12 @@ const methods: Record<string, Handler> = {
     await syncSessions();
     return db.listTracks(false);
   },
+  /**
+   * Finished tracks, newest first. Separate from `tracks.list` because the rail
+   * only asks for these when you open the `done` section — there is no reason to
+   * carry a year of closed work in every five-second poll.
+   */
+  'tracks.closed': async () => db.listTracks(true).filter((t) => t.lifecycle !== 'open'),
   'tracks.get': async (p) => db.getTrack(Number(p.id)),
   'tracks.create': async (p) => {
     const t = db.createTrack({

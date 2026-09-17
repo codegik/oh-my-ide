@@ -1,8 +1,12 @@
 import type { Court, Derivation, Effective, TrackRef, TrackSnapshot } from './types.js';
 
 /**
- * Whose court is the ball in. Deliberately NOT todo/doing/done: at 200 open
- * loops the only question that matters is whether something is waiting on you.
+ * Whose court is the ball in — ATTENTION, not status, and the two are separate
+ * on purpose. A track's status is binary and lives in `lifecycle`: it is either
+ * going on or it is finished. This axis answers a different question on a much
+ * faster clock — do I need to touch this right now — and nothing here is ever
+ * set by hand. Deliberately NOT todo/doing/done: at 200 open loops a board is
+ * something you maintain, and the day you stop maintaining it, it lies.
  *
  * Each rule reads ONE ref and returns a candidate. Highest weight wins.
  */
@@ -119,12 +123,16 @@ export function derive(t: TrackSnapshot, now: number): Derivation {
   }
 
   if (candidates.length === 0) {
-    // An open loop with no signal is YOURS. Silence never means someone else's problem.
+    // No signal means nothing is asking for you YET. This used to answer ON_ME,
+    // on the theory that silence is your problem — but every new and every idle
+    // track landed there, so the one court that means "act now" was also the
+    // court everything defaulted into, and it stopped being worth looking at.
+    // Work that has genuinely been forgotten is caught by `track.stale` above.
     return {
-      court: 'ON_ME',
-      weight: 10,
+      court: 'PARKED',
+      weight: 0,
       rule: 'default',
-      reason: 'nothing is blocking this but you',
+      reason: 'nothing is asking for you here',
       refId: null,
     };
   }

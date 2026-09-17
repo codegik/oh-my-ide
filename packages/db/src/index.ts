@@ -173,9 +173,19 @@ export class Db {
       }
     }
 
-    if (patch.lifecycle && patch.lifecycle !== 'open') {
-      sets.push('closed_at = ?', 'closed_reason = ?');
-      vals.push(now, patch.lifecycle);
+    /**
+     * `closed_at` is what every open-list query filters on, so it has to move
+     * with the lifecycle in BOTH directions. Setting it and never clearing it
+     * would leave a reopened track invisible in both lists — closed_at still
+     * set, so not open; lifecycle 'open', so not done either.
+     */
+    if (patch.lifecycle) {
+      if (patch.lifecycle === 'open') {
+        sets.push('closed_at = NULL', 'closed_reason = NULL');
+      } else {
+        sets.push('closed_at = ?', 'closed_reason = ?');
+        vals.push(now, patch.lifecycle);
+      }
     }
     if (sets.length === 0) return this.getTrack(id);
     sets.push('updated_at = ?');

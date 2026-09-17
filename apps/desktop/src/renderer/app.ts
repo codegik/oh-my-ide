@@ -48,10 +48,9 @@ function shortPath(full: string): string {
   return [parts[0], '…', ...parts.slice(-2)].join('/');
 }
 
-const COURTS = ['ON_ME', 'ON_CLAUDE', 'ON_SYSTEM', 'ON_THEM', 'PARKED'] as const;
 const COURT_LABEL: Record<string, string> = {
   ON_ME: 'ON ME', ON_CLAUDE: 'ON CLAUDE', ON_SYSTEM: 'ON SYSTEM',
-  ON_THEM: 'ON THEM', PARKED: 'PARKED',
+  ON_THEM: 'ON THEM', PARKED: 'PARKED', DONE: 'DONE', DROPPED: 'DROPPED',
 };
 
 /** Whose court a session state puts the ball in; drives the session dot colour. */
@@ -69,11 +68,19 @@ interface Ref {
 interface Track {
   id: number; title: string; question: string | null; nextAction: string | null;
   court: string; courtReason: string | null; courtRule: string | null; courtSource: string;
+  lifecycle: 'open' | 'done' | 'dropped';
   originUrl: string | null; lastActivityAt: number; cwd: string | null;
   refs: Ref[];
 }
 
 let tracks: Track[] = [];
+/**
+ * Finished tracks, fetched only while the `done` section is open. A track's
+ * status is binary — going on, or finished — so this is the whole of the other
+ * half, and it does not belong in the five-second poll.
+ */
+let closedTracks: Track[] = [];
+let doneOpen = false;
 let sessions: any[] = [];
 let openTabs: number[] = [];
 let activeTab: number | null = null;
@@ -231,21 +238,15 @@ const isAttachable = (ref: { externalId: string }) => liveSession(ref)?.kind ===
 const sessionRefsOf = (t: Track) => t.refs.filter((r) => r.kind === 'claude_session');
 
 /**
- * The rail's dot speaks for the track's sessions, not for its court — the group
- * header above already says whose court it is, and every row under one heading
- * would wear the same colour. What the rail cannot say otherwise is "something
- * in here is waiting on you", so the most urgent session wins: one that needs an
- * answer outranks three that are idle.
+ * The dot is ATTENTION — does this want me right now — and the derived court is
+ * already exactly that, so it is the only thing that colours one. There is no
+ * second rule here on purpose: a dot computed from sessions alone would miss a
+ * failing PR, and two engines answering the same question drift apart.
+ *
+ * Status is the other axis and never touches this: a track is going on or it is
+ * finished, and that lives in `lifecycle`.
  */
-const DOT_URGENCY = ['ON_ME', 'ON_CLAUDE', 'PARKED'];
-function sessionDotOf(t: Track): string {
-  let best = 'PARKED';
-  for (const r of sessionRefsOf(t)) {
-    const court = STATE_COURT[r.state ?? liveSession(r)?.state ?? ''] ?? 'PARKED';
-    if (DOT_URGENCY.indexOf(court) < DOT_URGENCY.indexOf(best)) best = court;
-  }
-  return best;
-}
+const dotOf = (t: Track) => t.court;
 
 /** The session on screen for a track: the remembered one, else the first. */
 function currentSession(t: Track): Ref | undefined {
@@ -264,40 +265,66 @@ function currentSession(t: Track): Ref | undefined {
 let railSig = '';
 let tabsSig = '';
 
-function renderRail() {
-  const groups = COURTS.map((c) => [c, tracks.filter((t) => t.court === c)] as const)
-    .filter(([, list]) => list.length > 0);
+const railRow = (t: Track) => `
+  <div class="titem ${activeTab === t.id ? 'sel' : ''}" data-id="${t.id}">
+    <span class="dot ${dotOf(t)}"></span>
+    <span class="tname">${esc(t.title)}</span>
+    <span class="tago">${ago(t.lastActivityAt)}</span>
+  </div>`;
 
-  const sig = groups
-    .map(([court, list]) =>
-      `${court}:${list.map((t) => `${t.id}/${t.title}/${sessionDotOf(t)}/${ago(t.lastActivityAt)}`).join(',')}`)
-    .join('|') + `|${activeTab}`;
+/**
+ * One flat list, not a board. Status is binary, so there is nothing to group by;
+ * the daemon already returns tracks ordered by court weight then recency, which
+ * floats whatever wants you to the top and leaves everything else where it was.
+ *
+ * Grouping by court is what this used to do, and it meant a row physically
+ * jumped between headings while you were reading it — a session finishing its
+ * turn would teleport the track from ON CLAUDE to ON ME. The dot changes colour
+ * in place instead, which says the same thing without moving anything.
+ */
+function renderRail() {
+  const needs = tracks.filter((t) => t.court === 'ON_ME').length;
+
+  const sig = tracks.map((t) => `${t.id}/${t.title}/${dotOf(t)}/${ago(t.lastActivityAt)}`).join(',')
+    + `|${activeTab}|${doneOpen}|${closedTracks.map((t) => t.id).join(',')}`;
   if (railSig === sig) return;
   railSig = sig;
 
-  $('railbody').innerHTML = groups.length === 0
-    ? '<div class="empty">No tracks yet.<br><br>Press <b>+ new</b> to make one.</div>'
-    : groups.map(([court, list]) => `
-        <div class="group">
-          <div class="ghead"><span>${COURT_LABEL[court]}</span><span>${list.length}</span></div>
-          ${list.map((t) => `
-            <div class="titem ${activeTab === t.id ? 'sel' : ''}" data-id="${t.id}">
-              <span class="dot ${sessionDotOf(t)}"></span>
-              <span class="tname">${esc(t.title)}</span>
-              <span class="tago">${ago(t.lastActivityAt)}</span>
-            </div>`).join('')}
-        </div>`).join('');
+  const done = `
+    <div class="donehead" id="donetoggle" title="finished tracks">
+      <span class="caret">${doneOpen ? '⌄' : '›'}</span>
+      <span>done</span>
+      <span class="tago">${doneOpen ? closedTracks.length || '' : ''}</span>
+    </div>
+    ${doneOpen ? closedTracks.map(railRow).join('') || '<div class="pad muted">nothing finished yet</div>' : ''}`;
+
+  $('railbody').innerHTML = tracks.length === 0 && !doneOpen
+    ? '<div class="empty">No tracks yet.<br><br>Press <b>+ track</b> to make one.</div>' + done
+    : `<div class="railhead">
+         <span>${tracks.length} open</span>
+         ${needs > 0 ? `<span class="needs">${needs} need${needs === 1 ? 's' : ''} you</span>` : ''}
+       </div>
+       ${tracks.map(railRow).join('')}
+       ${done}`;
 
   for (const el of document.querySelectorAll<HTMLElement>('.titem')) {
     el.onclick = () => openTrack(Number(el.dataset.id));
   }
+  $('donetoggle').onclick = () => { void toggleDone(); };
+}
+
+/** Finished tracks are fetched on demand — see `tracks.closed` in the daemon. */
+async function toggleDone() {
+  doneOpen = !doneOpen;
+  if (doneOpen) closedTracks = await window.omi.rpc('tracks.closed').catch(() => []);
+  renderRail();
 }
 
 function renderTabs() {
   const sig = openTabs
     .map((id) => {
       const t = tracks.find((x) => x.id === id);
-      return `${id}/${t?.title ?? ''}/${t ? sessionDotOf(t) : ''}`;
+      return `${id}/${t?.title ?? ''}/${t ? dotOf(t) : ''}`;
     })
     .join(',') + `|${activeTab}`;
   if (tabsSig === sig) return;
@@ -307,7 +334,7 @@ function renderTabs() {
     const t = tracks.find((x) => x.id === id);
     if (!t) return '';
     return `<div class="tab ${activeTab === id ? 'on' : ''}" data-id="${id}">
-      <span class="dot ${sessionDotOf(t)}"></span>${esc(t.title)}<span class="x" data-close="${id}">×</span></div>`;
+      <span class="dot ${dotOf(t)}"></span>${esc(t.title)}<span class="x" data-close="${id}">×</span></div>`;
   }).join('');
 
   for (const el of document.querySelectorAll<HTMLElement>('.tab')) {
@@ -338,7 +365,8 @@ let mounted: {
 
 const EMPTY_SIG = { head: '', sess: '', side: '', time: '' };
 
-const trackById = (id: number) => tracks.find((x) => x.id === id);
+const trackById = (id: number) =>
+  tracks.find((x) => x.id === id) ?? closedTracks.find((x) => x.id === id);
 
 const DETAIL_SKELETON = `
   <div class="thead">
@@ -346,6 +374,7 @@ const DETAIL_SKELETON = `
       <h2 id="dtitle"></h2>
       <span class="folder" id="folder"></span>
       <span class="court" id="whybtn" title="why?"></span>
+      <button class="fin" id="finish"></button>
     </div>
   </div>
   <div class="body">
@@ -430,8 +459,6 @@ function buildDetail(id: number) {
       <div class="whyacts">
         <button data-pin="ON_THEM">pin ON THEM</button>
         <button data-pin="">unpin</button>
-        <button data-life="done">mark done</button>
-        <button data-life="dropped">drop</button>
       </div>`;
     pop.hidden = false;
     for (const b of pop.querySelectorAll<HTMLElement>('[data-pin]')) {
@@ -461,7 +488,7 @@ function buildDetail(id: number) {
  */
 function patchHead(t: Track) {
   const m = mounted as NonNullable<typeof mounted>;
-  const sig = `${t.title}|${t.question}|${t.court}|${t.cwd}|${sessionRefsOf(t).length > 0}`;
+  const sig = `${t.title}|${t.question}|${t.court}|${t.lifecycle}|${t.cwd}|${sessionRefsOf(t).length > 0}`;
   if (m.sig.head === sig) return;
   m.sig.head = sig;
 
@@ -472,6 +499,24 @@ function patchHead(t: Track) {
   const court = $('whybtn');
   court.className = `court ${t.court}`;
   court.textContent = COURT_LABEL[t.court] ?? t.court;
+
+  // Binary: going on, or finished. Reopening is the same button, because a
+  // status with two values should never need two controls.
+  const finish = $<HTMLButtonElement>('finish');
+  const closed = t.lifecycle !== 'open';
+  finish.textContent = closed ? 'reopen' : 'finish';
+  finish.title = closed
+    ? `${t.lifecycle} — click to put this back in the open list`
+    : 'mark this finished and file it under done';
+  finish.onclick = () => {
+    void window.omi.rpc('tracks.update', {
+      id: t.id,
+      patch: { lifecycle: closed ? 'open' : 'done' },
+    }).then(() => {
+      if (!closed) closeTab(t.id);
+      return refreshAll();
+    });
+  };
 
   const folder = $('folder');
   const fixed = !!t.cwd && sessionRefsOf(t).length > 0;
@@ -711,7 +756,9 @@ function patchTimeline(t: Track) {
 }
 
 function renderDetail() {
-  const t = tracks.find((x) => x.id === activeTab);
+  // trackById, not `tracks`: a finished track opened from the `done` section is
+  // still readable — you just cannot do much in it.
+  const t = activeTab === null ? undefined : trackById(activeTab);
   const host = $('detail');
   if (!t) {
     if (mounted) {
@@ -1021,6 +1068,12 @@ function closeTab(id: number) {
 }
 
 function renderAll() { renderRail(); renderTabs(); renderDetail(); }
+
+/** Both halves of the binary: the open list, and the done section if it is up. */
+async function refreshAll() {
+  if (doneOpen) closedTracks = await window.omi.rpc('tracks.closed').catch(() => closedTracks);
+  return refresh();
+}
 
 async function refresh() {
   tracks = await window.omi.rpc('tracks.list');
