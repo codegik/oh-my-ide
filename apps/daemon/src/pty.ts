@@ -5,6 +5,73 @@ import { encodeControl, encodePtyOut } from '@omi/protocol';
 /** Per-view scrollback kept in memory for instant re-attach. */
 const RING_CAP = 2 * 1024 * 1024;
 
+/**
+ * Reads the session title out of a pty stream.
+ *
+ * The Claude CLI does not rename a session, but it does publish a running
+ * summary of the conversation as the terminal title (OSC 0/2), and reading it
+ * costs nothing: the bytes are already passing through.
+ *
+ * This is a state machine rather than a regex over each chunk because a title
+ * can be split across writes, and because a title the CLI starts and abandons
+ * must not be completed by an unrelated BEL later in the stream — that spliced
+ * fragments together and produced titles like "tReply session".
+ */
+export class TitleScanner {
+  /** Longest title we will assemble; past that it is not a title. */
+  private static readonly MAX = 256;
+  private buf: string | null = null;
+  /** Set when the last byte was ESC, which may begin OSC or end it (ESC \\). */
+  private sawEsc = false;
+
+  /** Feeds a chunk and returns the last title completed in it, if any. */
+  push(chunk: string): string | null {
+    let done: string | null = null;
+    for (const ch of chunk) {
+      if (this.buf === null) {
+        // Waiting for the "ESC ] 0 ;" / "ESC ] 2 ;" opener.
+        if (this.sawEsc && ch === ']') { this.buf = ''; this.sawEsc = false; continue; }
+        this.sawEsc = ch === '\x1b';
+        continue;
+      }
+      if (this.buf === '' && (ch === '0' || ch === '2')) continue; // the ps digit
+      if (this.buf === '' && ch === ';') continue;                // and its separator
+      if (ch === '\x07') { done = this.finish() ?? done; continue; }
+      if (this.sawEsc) {
+        // ESC \\ terminates; any other escape means this was never a title.
+        done = ch === '\\' ? (this.finish() ?? done) : done;
+        if (ch !== '\\') this.abandon();
+        this.sawEsc = false;
+        continue;
+      }
+      if (ch === '\x1b') { this.sawEsc = true; continue; }
+      if (this.buf.length >= TitleScanner.MAX) { this.abandon(); continue; }
+      this.buf += ch;
+    }
+    return done;
+  }
+
+  private finish(): string | null {
+    const raw = this.buf ?? '';
+    this.buf = null;
+    const clean = cleanTitle(raw);
+    return clean.length > 0 ? clean : null;
+  }
+
+  private abandon(): void {
+    this.buf = null;
+  }
+}
+
+/** Drops the CLI's status glyphs and squeezes whitespace. */
+export function cleanTitle(raw: string): string {
+  return raw
+    .replace(/[✀-➿☀-⛿←-⇿⬀-⯿■-◿]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 60);
+}
+
 export interface OpenOptions {
   viewId: string;
   file: string;
@@ -12,6 +79,8 @@ export interface OpenOptions {
   cwd: string;
   cols: number;
   rows: number;
+  /** Called when the session's own terminal title changes. */
+  onTitle?: (viewId: string, title: string) => void;
 }
 
 /**
@@ -27,6 +96,9 @@ class PtyView {
 
   private chunks: Buffer[] = [];
   private ringBytes = 0;
+  private title: string | null = null;
+  private readonly onTitle: ((viewId: string, title: string) => void) | undefined;
+  private readonly titles = new TitleScanner();
   /** Offset of the first byte still held in the ring. */
   private ringStart = 0n;
   private readonly subs = new Set<net.Socket>();
@@ -34,6 +106,7 @@ class PtyView {
 
   constructor(o: OpenOptions) {
     this.id = o.viewId;
+    this.onTitle = o.onTitle;
     this.proc = pty.spawn(o.file, o.args, {
       name: 'xterm-256color',
       cols: o.cols,
@@ -52,6 +125,7 @@ class PtyView {
   private onData(bytes: Buffer): void {
     const start = this.head;
     this.head += BigInt(bytes.length);
+    this.scanTitle(bytes);
 
     this.chunks.push(bytes);
     this.ringBytes += bytes.length;
@@ -64,6 +138,15 @@ class PtyView {
 
     const frame = encodePtyOut(this.id, this.epoch, start, bytes);
     for (const s of this.subs) s.write(frame);
+  }
+
+  /** Only the last title in a chunk matters; the CLI repaints it constantly. */
+  private scanTitle(bytes: Buffer): void {
+    if (!this.onTitle) return;
+    const clean = this.titles.push(bytes.toString('utf8'));
+    if (clean === null || clean === this.title) return;
+    this.title = clean;
+    this.onTitle(this.id, clean);
   }
 
   private broadcastControl(msg: unknown): void {

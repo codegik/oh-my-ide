@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import { BrowserWindow, app, ipcMain, shell } from 'electron';
+import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron';
 import {
   FRAME_CONTROL,
   FRAME_PTY_OUT,
@@ -87,8 +87,18 @@ class DaemonClient {
 
   private onControl(msg: Record<string, unknown>): void {
     if (msg.t === 'welcome') {
+      const reconnected = this.welcome !== null;
       this.welcome = msg;
       this.resolveWelcome(msg);
+      // A daemon that restarted has no pty views any more. Tell the renderer so
+      // it can re-attach instead of sitting in front of a dead terminal until
+      // someone reloads the window — surviving a daemon restart is the whole
+      // point of keeping sessions outside the app.
+      if (reconnected) {
+        for (const w of BrowserWindow.getAllWindows()) {
+          w.webContents.send('omi:event', { t: 'reconnected' });
+        }
+      }
       return;
     }
     if (msg.t === 'changed' || msg.t === 'pty.exit') {
@@ -193,6 +203,24 @@ app.whenReady().then(async () => {
   ipcMain.handle('omi:rpc', (_e, method: string, params?: unknown) => client.rpc(method, params));
   ipcMain.handle('omi:welcome', () => client.whenWelcome());
   ipcMain.handle('omi:openExternal', (_e, url: string) => shell.openExternal(url));
+  /**
+   * A native folder picker, not a text field: a track's folder decides which
+   * sessions it can even see, and a typo there is a track pointed at nothing.
+   * The dialog is modal to the window, which is safe — unlike a JS dialog in the
+   * renderer, it does not block the terminals.
+   */
+  ipcMain.handle('omi:pickFolder', async (e, startIn?: string) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const opts = {
+      title: 'choose a folder',
+      properties: ['openDirectory' as const, 'createDirectory' as const],
+      ...(startIn ? { defaultPath: startIn } : {}),
+    };
+    const r = win
+      ? await dialog.showOpenDialog(win, opts)
+      : await dialog.showOpenDialog(opts);
+    return r.canceled ? null : (r.filePaths[0] ?? null);
+  });
   ipcMain.on('omi:ptyInput', (_e, viewId: string, bytes: Uint8Array) =>
     client.ptyInput(viewId, bytes),
   );

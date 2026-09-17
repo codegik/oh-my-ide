@@ -25,7 +25,12 @@ export function parseBackgroundedId(stdout: string): string | null {
 export class ClaudeBgRunner implements SessionRunner {
   async start(o: {
     cwd: string;
-    prompt: string;
+    /**
+     * Optional: `claude --bg` with no prompt backgrounds an idle session
+     * ("idle — send a prompt to start"), which is what opening a fresh terminal
+     * should do. Nothing is spent until the user types.
+     */
+    prompt?: string;
     name?: string;
     sessionId?: string;
   }): Promise<StartedSession> {
@@ -33,7 +38,7 @@ export class ClaudeBgRunner implements SessionRunner {
     const args = ['--bg'];
     if (o.name) args.push('-n', o.name);
     if (o.sessionId) args.push('--session-id', o.sessionId);
-    args.push(o.prompt);
+    if (o.prompt) args.push(o.prompt);
 
     const stdout = await runClaude(args, { cwd: o.cwd, timeoutMs: 60_000 });
     const shortId = parseBackgroundedId(stdout);

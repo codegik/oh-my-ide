@@ -15,5 +15,5 @@ export default defineConfig({
       '@omi/db': pkg('db'),
     },
   },
-  test: { include: ['packages/*/test/**/*.test.ts'], environment: 'node' },
+  test: { include: ['{packages,apps}/*/test/**/*.test.ts'], environment: 'node' },
 });

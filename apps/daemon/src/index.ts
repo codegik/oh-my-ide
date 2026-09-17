@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { ClaudeBgRunner, probe } from '@omi/claude-adapter';
+import { ClaudeBgRunner, probe, shortIdOf } from '@omi/claude-adapter';
 import type { ClaudeCompat, NormalizedSession } from '@omi/claude-adapter';
 import { parseRef } from '@omi/core';
 import { Db } from '@omi/db';
@@ -77,6 +77,41 @@ async function syncSessions(): Promise<NormalizedSession[]> {
   return sessions;
 }
 
+/**
+ * The CLI's own name, which it sets as the title before the conversation has a
+ * subject. It says nothing about this session, so it is never worth storing and
+ * never worth keeping once a real title turns up.
+ */
+const GENERIC_TITLE = /^claude(\s+code)?$/i;
+
+/**
+ * A session starts life named after its own short id, because there is nothing
+ * to call it yet. The first thing the user types gives it a subject, and the CLI
+ * publishes that as its terminal title — so that title becomes the session's
+ * name. A name the user chose, or one a session already carried, is theirs and
+ * stays.
+ */
+function adoptTitle(viewId: string, title: string): void {
+  if (GENERIC_TITLE.test(title)) return;
+  const shortId = viewId.replace(/^claude:/, '');
+  const touched: number[] = [];
+  for (const r of db.listSessionRefs()) {
+    if (shortIdOf(r.externalId.replace(/^claude:/, '')) !== shortId) continue;
+    // Replaceable: the id it was born with, or the CLI's generic title.
+    const placeholder = !r.label || r.label === shortId || GENERIC_TITLE.test(r.label);
+    if (!placeholder) continue;
+    db.setRefLabel(r.id, title);
+    db.addEvent({
+      trackId: r.trackId,
+      source: 'claude',
+      kind: 'session.named',
+      title: `session named "${title}"`,
+    });
+    touched.push(r.trackId);
+  }
+  if (touched.length > 0) broadcast({ t: 'changed', entity: 'track', ids: [...new Set(touched)] });
+}
+
 type Handler = (params: any, sock: net.Socket) => Promise<unknown>;
 
 const methods: Record<string, Handler> = {
@@ -88,6 +123,23 @@ const methods: Record<string, Handler> = {
   'claude.compat': async () => getCompat(),
 
   'sessions.list': async () => (await syncSessions()).sort((a, b) => b.startedAt - a.startedAt),
+
+  /** Starts a background session in a folder, idle unless a prompt is given. */
+  'sessions.create': async (p) => {
+    const cwd = String(p.cwd ?? '').trim();
+    if (!cwd) throw new Error('a folder is required to start a session');
+    if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
+      throw new Error(`not a folder: ${cwd}`);
+    }
+    // exactOptionalPropertyTypes: an absent field and a field set to `undefined`
+    // are not the same thing to the runner's arg type.
+    const prompt = String(p.prompt ?? '').trim();
+    return runner.start({
+      cwd,
+      ...(prompt ? { prompt } : {}),
+      ...(p.name ? { name: String(p.name) } : {}),
+    });
+  },
 
   // ── tracks ────────────────────────────────────────────────────────────────
   'tracks.list': async () => {
@@ -124,6 +176,8 @@ const methods: Record<string, Handler> = {
     if (!parsed) throw new Error('could not recognize that as a link, ticket key or path');
     db.addRef({
       trackId: Number(p.id),
+      // Scoped to whichever session the user was looking at; '' means the track.
+      sessionId: p.sessionId ? String(p.sessionId) : '',
       kind: parsed.kind,
       externalId: parsed.externalId,
       url: parsed.url,
@@ -138,6 +192,11 @@ const methods: Record<string, Handler> = {
     const sessions = await runner.list();
     const s = sessions.find((x) => x.sessionId === p.sessionId || x.shortId === p.sessionId);
     if (!s) throw new Error('no such session');
+    // A track with no folder of its own takes the one the session is already
+    // running in — the user picked the session, so they picked the folder with
+    // it, and asking them again would only offer a chance to get it wrong.
+    const track = db.getTrack(Number(p.id));
+    if (track && !track.cwd && s.cwd) db.updateTrack(track.id, { cwd: s.cwd });
     db.addRef({
       trackId: Number(p.id),
       kind: 'claude_session',
@@ -147,8 +206,41 @@ const methods: Record<string, Handler> = {
       role: 'implementation',
       linkRule: 'manual',
     });
+    db.adoptOrphanRefs(Number(p.id), `claude:${s.sessionId}`);
     broadcast({ t: 'changed', entity: 'track', ids: [Number(p.id)] });
     return db.getTrack(Number(p.id));
+  },
+
+  /**
+   * Starts a new session for a track, in the track's own folder, and links it.
+   * This is the "+ session" path: one track, several conversations.
+   */
+  'tracks.startSession': async (p) => {
+    const track = db.getTrack(Number(p.id));
+    if (!track) throw new Error('no such track');
+    const cwd = String(p.cwd ?? track.cwd ?? '').trim();
+    if (!cwd) throw new Error('this track has no folder; pass one');
+    // No prompt: the session opens idle and waits for the user to type into it,
+    // which is what a new terminal should do. Nothing is spent up front, and the
+    // first message is what ends up naming it (see adoptTitle).
+    const prompt = String(p.prompt ?? '').trim();
+    const started = await runner.start({
+      cwd,
+      ...(prompt ? { prompt } : {}),
+      ...(p.name ? { name: String(p.name) } : {}),
+    });
+    db.addRef({
+      trackId: track.id,
+      kind: 'claude_session',
+      externalId: `claude:${started.sessionId}`,
+      label: started.name ?? started.shortId,
+      state: 'STARTING',
+      role: 'implementation',
+      linkRule: 'started-here',
+    });
+    db.adoptOrphanRefs(track.id, `claude:${started.sessionId}`);
+    broadcast({ t: 'changed', entity: 'track', ids: [track.id] });
+    return { track: db.getTrack(track.id), session: started };
   },
 
   'tracks.removeRef': async (p) => {
@@ -186,6 +278,7 @@ const methods: Record<string, Handler> = {
       cwd: p.cwd ?? os.homedir(),
       cols: Number(p.cols ?? 120),
       rows: Number(p.rows ?? 32),
+      onTitle: adoptTitle,
     });
     const info = view.attach(sock);
     return { viewId, ...info };

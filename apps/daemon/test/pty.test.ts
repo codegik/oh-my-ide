@@ -1,0 +1,57 @@
+import { describe, expect, it } from 'vitest';
+import { TitleScanner, cleanTitle } from '../src/pty.js';
+
+/**
+ * The CLI never renames a session, but it does publish a running summary of the
+ * conversation as the terminal title. That is what names a session here, so the
+ * scanner has to survive the shape of real output — including titles split over
+ * writes, and titles the CLI starts and then abandons.
+ */
+describe('TitleScanner', () => {
+  const feed = (...chunks: string[]) => {
+    const s = new TitleScanner();
+    return chunks.map((c) => s.push(c));
+  };
+
+  it('reads a BEL-terminated title out of real output', () => {
+    // Verbatim tail from `claude attach` after a first prompt, v2.1.272.
+    const real =
+      '\x1b[38;2;255;168;76mTransmogrifying…\x1b[39m\x1b[30;1H\x1b[28;3H' +
+      '\x1b[?25h\x1b]0;✳ Reply with exactly ok\x07\x1b[?25l\x1b[H';
+    expect(feed(real)).toEqual(['Reply with exactly ok']);
+  });
+
+  it('accepts the ST terminator and OSC 2 as well', () => {
+    expect(feed('\x1b]2;fix the retry storm\x1b\\')).toEqual(['fix the retry storm']);
+  });
+
+  it('assembles a title split across writes', () => {
+    expect(feed('\x1b]0;✳ Reply with', ' exactly ok\x07')).toEqual([null, 'Reply with exactly ok']);
+  });
+
+  it('keeps the last title in a chunk, because the CLI repaints it', () => {
+    expect(feed('\x1b]0;first\x07 noise \x1b]0;second\x07')).toEqual(['second']);
+  });
+
+  it('abandons a title interrupted by another escape, instead of splicing', () => {
+    // This is the bug the state machine exists for: a started-then-abandoned
+    // title must not be completed by an unrelated BEL later in the stream.
+    expect(feed('\x1b]0;half a tit', '\x1b[2Kredraw', 'Reply session\x07')).toEqual([null, null, null]);
+  });
+
+  it('gives nothing for plain output or a title of only decoration', () => {
+    expect(feed('\x1b[2J\x1b[H plain output')).toEqual([null]);
+    expect(feed('\x1b]0;✳\x07')).toEqual([null]);
+  });
+
+  it('stops assembling once a title is absurdly long', () => {
+    expect(feed(`\x1b]0;${'x'.repeat(400)}\x07`)).toEqual([null]);
+  });
+});
+
+describe('cleanTitle', () => {
+  it('strips status glyphs, squeezes space, and caps the length', () => {
+    expect(cleanTitle('✳  why   are payments  timing out')).toBe('why are payments timing out');
+    expect(cleanTitle('x'.repeat(200))).toHaveLength(60);
+  });
+});

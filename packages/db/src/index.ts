@@ -37,9 +37,13 @@ export class Db {
   constructor(path: string) {
     this.db = new Database(path);
     this.db.pragma('journal_mode = WAL');
-    this.db.pragma('foreign_keys = ON');
     this.db.pragma('busy_timeout = 5000');
+    // A migration that rebuilds a referenced table (the only way SQLite can
+    // change a constraint) would otherwise trip the FKs pointing at it. The
+    // pragma is a no-op inside a transaction, so it has to be set out here.
+    this.db.pragma('foreign_keys = OFF');
     this.migrate();
+    this.db.pragma('foreign_keys = ON');
   }
 
   private migrate(): void {
@@ -122,6 +126,8 @@ export class Db {
       question: string | null;
       nextAction: string | null;
       waitingOn: string | null;
+      cwd: string | null;
+      gitBranch: string | null;
       lifecycle: 'open' | 'done' | 'dropped';
     }>,
   ): TrackRow | null {
@@ -133,6 +139,8 @@ export class Db {
       question: 'question',
       nextAction: 'next_action',
       waitingOn: 'waiting_on',
+      cwd: 'cwd',
+      gitBranch: 'git_branch',
       lifecycle: 'lifecycle',
     };
     for (const [k, v] of Object.entries(patch)) {
@@ -141,6 +149,30 @@ export class Db {
       sets.push(`${c} = ?`);
       vals.push(v);
     }
+    /**
+     * A session runs in the folder it was started in — Claude owns that, and
+     * nothing here can move it. So once a track has a session bound to it, the
+     * track's folder is settled too: changing it would describe the sessions
+     * wrongly. Setting one for the first time is not a change.
+     */
+    if (patch.cwd !== undefined) {
+      const cur = this.db.prepare('SELECT cwd FROM track WHERE id = ?').get(id) as
+        | { cwd: string | null }
+        | undefined;
+      if (cur?.cwd && cur.cwd !== patch.cwd) {
+        const n = this.db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM track_ref WHERE track_id = ? AND kind = 'claude_session'",
+          )
+          .get(id) as { n: number };
+        if (n.n > 0) {
+          throw new Error(
+            `this track has ${n.n} session${n.n === 1 ? '' : 's'} bound to ${cur.cwd}; its folder cannot change`,
+          );
+        }
+      }
+    }
+
     if (patch.lifecycle && patch.lifecycle !== 'open') {
       sets.push('closed_at = ?', 'closed_reason = ?');
       vals.push(now, patch.lifecycle);
@@ -159,6 +191,8 @@ export class Db {
     trackId: number;
     kind: RefKind;
     externalId: string;
+    /** '' (the default) scopes the ref to the whole track rather than one session. */
+    sessionId?: string | null;
     url?: string | null;
     label?: string | null;
     role?: string;
@@ -170,14 +204,14 @@ export class Db {
     const now = Date.now();
     this.db
       .prepare(
-        `INSERT INTO track_ref (track_id, kind, external_id, url, label, role, state,
+        `INSERT INTO track_ref (track_id, session_id, kind, external_id, url, label, role, state,
                                 body, auto_linked, link_rule, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-         ON CONFLICT(track_id, kind, external_id) DO UPDATE SET
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(track_id, session_id, kind, external_id) DO UPDATE SET
            url=excluded.url, label=excluded.label, state=excluded.state, updated_at=excluded.updated_at`,
       )
       .run(
-        o.trackId, o.kind, o.externalId, o.url ?? null, o.label ?? null,
+        o.trackId, o.sessionId ?? '', o.kind, o.externalId, o.url ?? null, o.label ?? null,
         o.role ?? 'support', o.state ?? null, o.body ?? null,
         o.autoLinked ? 1 : 0, o.linkRule ?? null, now, now,
       );
@@ -191,9 +225,69 @@ export class Db {
     this.recomputeCourt(o.trackId);
   }
 
+  /**
+   * A session can only be unlinked once nothing is filed under it. Its refs live
+   * in its scope, so removing a session that still holds some would take them
+   * with it — that is the one case this refuses. An empty session (a terminal
+   * opened and not used, say) is the user's to remove.
+   */
   removeRef(trackId: number, refId: number): void {
+    const row = this.db
+      .prepare('SELECT kind, external_id FROM track_ref WHERE id = ? AND track_id = ?')
+      .get(refId, trackId) as { kind: string; external_id: string } | undefined;
+    if (!row) return;
+    if (row.kind === 'claude_session') {
+      const held = this.db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM track_ref
+            WHERE track_id = ? AND session_id = ? AND kind <> 'claude_session'`,
+        )
+        .get(trackId, row.external_id) as { n: number };
+      if (held.n > 0) {
+        throw new Error(
+          `this session still has ${held.n} ref${held.n === 1 ? '' : 's'} linked to it; unlink those first`,
+        );
+      }
+    }
     this.db.prepare('DELETE FROM track_ref WHERE id = ? AND track_id = ?').run(refId, trackId);
     this.recomputeCourt(trackId);
+  }
+
+  /** Every session ref across all tracks, for matching a pty view to a track. */
+  listSessionRefs(): { id: number; trackId: number; externalId: string; label: string | null }[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT id, track_id, external_id, label FROM track_ref
+            WHERE kind = 'claude_session'`,
+        )
+        .all() as Record<string, unknown>[]
+    ).map((r) => ({
+      id: r.id as number,
+      trackId: r.track_id as number,
+      externalId: r.external_id as string,
+      label: (r.label as string | null) ?? null,
+    }));
+  }
+
+  setRefLabel(refId: number, label: string): void {
+    this.db
+      .prepare('UPDATE track_ref SET label = ?, updated_at = ? WHERE id = ?')
+      .run(label, Date.now(), refId);
+  }
+
+  /**
+   * Hands a track's unscoped refs to a session. A ref can only be unscoped if
+   * it was written before the track had any session, so whichever session
+   * arrives first is the one it was really about.
+   */
+  adoptOrphanRefs(trackId: number, sessionExternalId: string): void {
+    this.db
+      .prepare(
+        `UPDATE OR IGNORE track_ref SET session_id = ?, updated_at = ?
+          WHERE track_id = ? AND session_id = '' AND kind <> 'claude_session'`,
+      )
+      .run(sessionExternalId, Date.now(), trackId);
   }
 
   /** Called by the poller when a session or PR changes state. */
@@ -345,6 +439,7 @@ export class Db {
       label: (r.label as string | null) ?? null,
       state: (r.state as string | null) ?? null,
       isBlocking: (r.is_blocking as number) === 1,
+      sessionId: (r.session_id as string | null) ?? '',
     }));
   }
 

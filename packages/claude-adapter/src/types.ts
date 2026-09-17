@@ -71,7 +71,8 @@ export interface ClaudeCompat {
  * documented flags ever change.
  */
 export interface SessionRunner {
-  start(o: { cwd: string; prompt: string; name?: string; sessionId?: string }): Promise<StartedSession>;
+  /** An absent prompt starts the session idle, waiting for its first message. */
+  start(o: { cwd: string; prompt?: string; name?: string; sessionId?: string }): Promise<StartedSession>;
   /** argv for a PTY the daemon owns, and for the "attach in your terminal" button. */
   attachCommand(s: { shortId: string }): { file: string; args: string[] };
   resume(o: { sessionId: string; fork?: boolean }): Promise<StartedSession>;

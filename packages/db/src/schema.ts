@@ -112,6 +112,83 @@ CREATE TABLE setting (
 ) STRICT;
 `;
 
+/**
+ * Migration 0002. Refs become (track, session)-scoped.
+ *
+ * A track can hold several sessions, and they are rarely working on the same
+ * thing, so the PR or ticket that matters for one is noise on the other. An
+ * empty session_id means "the whole track", which is what every ref written
+ * before this migration was.
+ *
+ * The UNIQUE key has to grow to include session_id, and SQLite cannot alter a
+ * constraint in place, so this is the documented 12-step rebuild. Row ids are
+ * copied verbatim, which is what keeps event.ref_id pointing at the same refs.
+ */
+export const MIGRATION_0002 = `
+CREATE TABLE track_ref_new (
+  id           INTEGER PRIMARY KEY,
+  track_id     INTEGER NOT NULL REFERENCES track(id) ON DELETE CASCADE,
+  session_id   TEXT NOT NULL DEFAULT '',
+  kind         TEXT NOT NULL CHECK (kind IN ('claude_session','github_pr','github_issue',
+                 'slack_message','jira_issue','file','url','note')),
+  external_id  TEXT NOT NULL,
+  url          TEXT,
+  label        TEXT,
+  role         TEXT NOT NULL DEFAULT 'support'
+                 CHECK (role IN ('origin','tracker','implementation','review',
+                                 'discussion','reference','support')),
+  state        TEXT,
+  is_blocking  INTEGER NOT NULL DEFAULT 1,
+  auto_linked  INTEGER NOT NULL DEFAULT 0,
+  link_rule    TEXT,
+  body         TEXT,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  UNIQUE (track_id, session_id, kind, external_id)
+) STRICT;
+
+INSERT INTO track_ref_new (id, track_id, session_id, kind, external_id, url, label,
+                           role, state, is_blocking, auto_linked, link_rule, body,
+                           created_at, updated_at)
+  SELECT id, track_id, '', kind, external_id, url, label, role, state, is_blocking,
+         auto_linked, link_rule, body, created_at, updated_at FROM track_ref;
+
+DROP TABLE track_ref;
+ALTER TABLE track_ref_new RENAME TO track_ref;
+
+CREATE INDEX track_ref_track   ON track_ref(track_id);
+CREATE INDEX track_ref_ext     ON track_ref(kind, external_id);
+CREATE INDEX track_ref_session ON track_ref(track_id, session_id);
+`;
+
+/**
+ * Migration 0003. Refs belong to a session, full stop.
+ *
+ * 0002 left a track-level scope behind; in practice a ref is always about the
+ * conversation it came up in, so the refs written before there was a session to
+ * pin them to are adopted by the track's first one. OR IGNORE covers the only
+ * collision possible — the same ref already linked under that session — and
+ * leaves the older, unscoped row alone rather than failing the migration.
+ *
+ * A track with no session yet keeps its refs at '' and hands them over when it
+ * gets one (see Db.adoptOrphanRefs).
+ */
+export const MIGRATION_0003 = `
+UPDATE OR IGNORE track_ref SET session_id = (
+  SELECT s.external_id FROM track_ref s
+   WHERE s.track_id = track_ref.track_id AND s.kind = 'claude_session'
+   ORDER BY s.id LIMIT 1
+)
+WHERE kind <> 'claude_session'
+  AND session_id = ''
+  AND EXISTS (
+    SELECT 1 FROM track_ref s
+     WHERE s.track_id = track_ref.track_id AND s.kind = 'claude_session'
+  );
+`;
+
 export const MIGRATIONS: { version: number; sql: string }[] = [
   { version: 1, sql: MIGRATION_0001 },
+  { version: 2, sql: MIGRATION_0002 },
+  { version: 3, sql: MIGRATION_0003 },
 ];

@@ -91,20 +91,40 @@ case "${1:-run}" in
     # matches any process whose command line contains the path, including this
     # shell and any editor that happens to have the file open.
     if ! daemon_alive; then echo "daemon was not running"; exit 0; fi
+    # The socket speaks the length-prefixed framing from @omi/protocol
+    # (u32be length, u8 type, payload), NOT newline JSON: a bare JSON line looks
+    # like a corrupt frame, and the daemon hangs up on it rather than guessing.
     node -e '
       const net = require("node:net");
+      const CONTROL = 0x01;
+      const frame = (msg) => {
+        const body = Buffer.from(JSON.stringify(msg), "utf8");
+        const out = Buffer.allocUnsafe(5 + body.length);
+        out.writeUInt32BE(body.length + 1, 0);
+        out.writeUInt8(CONTROL, 4);
+        body.copy(out, 5);
+        return out;
+      };
       const s = net.connect(process.argv[1]);
       s.on("connect", () => {
-        s.write(JSON.stringify({ t: "hello", protocol: 1, client: "stop", pid: process.pid }) + "\n");
-        s.write(JSON.stringify({ t: "rpc", id: 1, method: "daemon.shutdown" }) + "\n");
+        s.write(frame({ t: "hello", protocol: 1, client: "stop", pid: process.pid }));
+        s.write(frame({ t: "rpc", id: 1, method: "daemon.shutdown" }));
       });
-      let b = "";
+      let buf = Buffer.alloc(0);
       s.on("data", (d) => {
-        b += d;
-        for (const l of b.split("\n")) {
-          if (!l.trim()) continue;
-          const m = JSON.parse(l);
-          if (m.t === "result" && m.id === 1) { console.log("daemon stopped (pid " + m.data.pid + ") \u00b7 Claude sessions unaffected"); process.exit(0); }
+        buf = Buffer.concat([buf, d]);
+        while (buf.length >= 5) {
+          const len = buf.readUInt32BE(0);
+          if (buf.length < 4 + len) break;
+          const typ = buf.readUInt8(4);
+          const payload = buf.subarray(5, 4 + len);
+          buf = buf.subarray(4 + len);
+          if (typ !== CONTROL) continue;
+          const m = JSON.parse(payload.toString("utf8"));
+          if (m.t === "result" && m.id === 1) {
+            console.log("daemon stopped (pid " + m.data.pid + ") \u00b7 Claude sessions unaffected");
+            process.exit(0);
+          }
         }
       });
       s.on("error", () => { console.log("daemon was not running"); process.exit(0); });

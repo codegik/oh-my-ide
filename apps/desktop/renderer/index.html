@@ -8,105 +8,200 @@
   :root {
     --bg:#0f1115; --panel:#161922; --line:#232838; --text:#e6e9f0; --dim:#8b93a7;
     --ON_ME:#ff7a59; --ON_CLAUDE:#4ea1ff; --ON_THEM:#c08cff; --ON_SYSTEM:#ffc857; --PARKED:#5b6478;
+    /* Sizes are relative to this one, so the whole UI scales from here. The
+       terminal font is set in the renderer, next to the Terminal options. */
+    --fs:15px; --fs-s:13px; --fs-xs:12px;
+    /* The rail column. The header's left cell matches it so the tab bar starts
+       on the same vertical line the track list draws below. */
+    --rail:300px;
   }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text); height:100vh; overflow:hidden;
-         font:13px/1.5 "JetBrains Mono","Fira Code",ui-monospace,monospace;
+         font:var(--fs)/1.55 "JetBrains Mono","Fira Code",ui-monospace,monospace;
          display:flex; flex-direction:column; }
-  header { display:flex; align-items:center; gap:10px; padding:0 12px; height:38px;
+  header { display:flex; align-items:stretch; height:36px;
            border-bottom:1px solid var(--line); background:var(--panel); flex:none; }
-  .brand { font-weight:700; margin-right:6px; }
-  #tabs { display:flex; gap:4px; flex:1; overflow:auto; }
-  .tab { display:flex; align-items:center; gap:7px; padding:4px 9px; border-radius:5px 5px 0 0;
-         background:#1a1e29; color:var(--dim); cursor:pointer; white-space:nowrap; font-size:12px; }
+  #tabs { display:flex; align-items:flex-end; gap:4px; flex:1; min-width:0;
+          padding:0 8px; overflow-x:auto; overflow-y:hidden; }
+  .tab { display:flex; align-items:center; gap:7px; padding:5px 10px; border-radius:5px 5px 0 0;
+         background:#1a1e29; color:var(--dim); cursor:pointer; white-space:nowrap; font-size:var(--fs-s); }
   .tab.on { background:var(--bg); color:var(--text); box-shadow:inset 0 -2px 0 var(--ON_ME); }
   .tab .x { color:#5b6478; padding-left:3px; }
   .tab .x:hover { color:#ff5555; }
-  .pill { font-size:11px; color:var(--dim); border:1px solid var(--line); border-radius:999px; padding:1px 9px; }
-  main { flex:1; display:grid; grid-template-columns:270px 1fr; min-height:0; }
+  main { flex:1; display:grid; grid-template-columns:var(--rail) minmax(0,1fr); min-height:0; }
   #rail { border-right:1px solid var(--line); overflow:auto; padding-bottom:20px; }
-  .railtop { display:flex; align-items:center; justify-content:space-between;
-             padding:8px 12px; border-bottom:1px solid var(--line); }
+  .railtop { display:flex; align-items:center; width:var(--rail); flex:none;
+             padding:0 10px; border-right:1px solid var(--line); }
+  .railtop button { flex:1; }
   .railtop button { background:#1d2230; color:var(--text); border:1px solid var(--line);
-                    border-radius:5px; padding:3px 9px; cursor:pointer; font:inherit; font-size:11px; }
+                    border-radius:5px; padding:4px 10px; cursor:pointer; font:inherit; font-size:var(--fs-s); }
   .group { margin-top:10px; }
   .ghead { display:flex; justify-content:space-between; padding:3px 12px; color:var(--dim);
-           font-size:10px; letter-spacing:.8px; }
-  .titem { display:flex; align-items:center; gap:8px; padding:5px 12px; cursor:pointer; }
+           font-size:var(--fs-xs); letter-spacing:.8px; }
+  .titem { display:flex; align-items:center; gap:8px; padding:6px 12px; cursor:pointer; }
   .titem:hover { background:#1a1e29; }
   .titem.sel { background:#1d2230; }
-  .tname { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
-  .tago { color:var(--dim); font-size:10px; }
-  .dot { width:7px; height:7px; border-radius:50%; flex:none; background:var(--PARKED); }
+  .tname { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--fs-s); }
+  .tago { color:var(--dim); font-size:var(--fs-xs); }
+  .dot { width:8px; height:8px; border-radius:50%; flex:none; background:var(--PARKED); }
   .dot.ON_ME{background:var(--ON_ME)} .dot.ON_CLAUDE{background:var(--ON_CLAUDE)}
   .dot.ON_THEM{background:var(--ON_THEM)} .dot.ON_SYSTEM{background:var(--ON_SYSTEM)}
   #detail { display:flex; flex-direction:column; min-width:0; min-height:0; }
-  .thead { padding:12px 16px 8px; border-bottom:1px solid var(--line); }
-  .trow { display:flex; align-items:center; gap:12px; }
-  .thead h2 { margin:0; font-size:15px; font-weight:600; flex:1; }
-  .court { font-size:10px; letter-spacing:.7px; padding:2px 8px; border-radius:999px;
+  .thead { padding:9px 14px; border-bottom:1px solid var(--line); }
+  .trow { display:flex; align-items:baseline; gap:12px; min-width:0; }
+  .thead h2 { margin:0; font-size:17px; font-weight:600; flex:none;
+              overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:55%; }
+  .court { font-size:var(--fs-xs); letter-spacing:.7px; padding:2px 9px; border-radius:999px;
            cursor:pointer; background:#1d2230; }
   .court.ON_ME{color:var(--ON_ME)} .court.ON_CLAUDE{color:var(--ON_CLAUDE)}
   .court.ON_THEM{color:var(--ON_THEM)} .court.ON_SYSTEM{color:var(--ON_SYSTEM)}
-  .q { color:var(--dim); font-size:12px; margin-top:3px; }
-  .next { margin-top:8px; display:flex; gap:6px; align-items:center; color:var(--ON_ME); }
-  .next input { flex:1; background:transparent; border:none; border-bottom:1px dashed var(--line);
-                color:var(--text); font:inherit; font-size:12px; padding:2px 0; outline:none; }
-  .body { flex:1; display:grid; grid-template-columns:1fr 300px; min-height:0; }
+  .folder { flex:1; min-width:0; font-size:var(--fs-xs); color:var(--dim); cursor:pointer;
+            overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .folder:hover { color:var(--text); }
+  /* Bound to sessions: no longer a choice, so it stops behaving like one. */
+  .folder.fixed { cursor:default; }
+  .folder.fixed:hover { color:var(--dim); }
+  .body { flex:1; display:grid; grid-template-columns:minmax(0,1fr) 330px; min-height:0; position:relative; }
   .left { display:flex; flex-direction:column; min-width:0; min-height:0; border-right:1px solid var(--line); }
+
+  /* session strip: one chip per conversation in the track */
+  .sessbar { display:flex; align-items:center; gap:5px; padding:6px 8px; overflow-x:auto;
+             border-bottom:1px solid var(--line); flex:none; }
+  .sess { display:flex; align-items:center; gap:7px; padding:4px 9px; border-radius:5px;
+          background:#1a1e29; color:var(--dim); cursor:pointer; white-space:nowrap; font-size:var(--fs-s); }
+  .sess:hover { color:var(--text); }
+  .sess.on { background:#232838; color:var(--text); box-shadow:inset 0 -2px 0 var(--ON_CLAUDE); }
+  .sstate { color:var(--dim); font-size:var(--fs-xs); }
+  .sess .x { color:#5b6478; font-size:var(--fs-s); padding-left:2px; }
+  .sess .x:hover { color:#ff5555; }
+  .sadd { background:transparent; color:var(--dim); border:1px dashed var(--line); border-radius:5px;
+          padding:4px 9px; cursor:pointer; font:inherit; font-size:var(--fs-s); white-space:nowrap; }
+  .sadd:hover { color:var(--text); border-color:var(--dim); }
+
   .termwrap { flex:1; min-height:0; background:#0b0d12; padding:6px; }
   .termhost { width:100%; height:100%; }
-  .termbar { display:flex; align-items:center; justify-content:space-between; gap:8px;
-             padding:5px 10px; border-top:1px solid var(--line); font-size:11px; }
-  .termbar button, .termbar select { background:#1d2230; color:var(--text); border:1px solid var(--line);
-             border-radius:5px; padding:3px 8px; font:inherit; font-size:11px; cursor:pointer; }
+  /* Only matters when the refs panel is a drawer; see the media queries. */
+  .sidetoggle { display:none; background:transparent; color:var(--dim);
+                border:1px dashed var(--line); border-radius:5px; padding:4px 9px;
+                cursor:pointer; font:inherit; font-size:var(--fs-s); margin-left:auto; }
+  .sidetoggle:hover { color:var(--text); border-color:var(--dim); }
+  .sideclose { display:none; position:absolute; top:6px; right:8px; z-index:2;
+               background:#1d2230; color:var(--text); border:1px solid var(--line);
+               border-radius:5px; width:26px; height:26px; line-height:1; cursor:pointer;
+               font:inherit; font-size:var(--fs-s); }
+  .sideclose:hover { border-color:var(--dim); color:#ff8f75; }
   .side { overflow:auto; display:flex; flex-direction:column; }
-  .shead { padding:8px 12px 4px; color:var(--dim); font-size:10px; letter-spacing:.8px; }
-  .ref { display:flex; align-items:center; gap:6px; padding:4px 12px; font-size:11px; }
+  .shead { padding:9px 12px 4px; color:var(--dim); font-size:var(--fs-xs); letter-spacing:.8px; }
+  .shead b { color:var(--text); font-weight:600; letter-spacing:0; }
+  .ref { display:flex; align-items:center; gap:6px; padding:4px 12px; font-size:var(--fs-s); }
   .ref:hover { background:#1a1e29; }
-  .rk { color:var(--dim); min-width:78px; }
+  .rk { color:var(--dim); min-width:88px; font-size:var(--fs-xs); }
   .rl { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .rs { color:var(--ON_SYSTEM); font-size:10px; }
+  .rs { color:var(--ON_SYSTEM); font-size:var(--fs-xs); }
   .go, .rm { cursor:pointer; color:var(--dim); }
   .go:hover { color:var(--ON_CLAUDE); } .rm:hover { color:#ff5555; }
-  .side input { margin:6px 12px; background:#0b0d12; border:1px solid var(--line); border-radius:5px;
-                color:var(--text); font:inherit; font-size:11px; padding:4px 7px; outline:none; }
+  .side > input { margin:6px 12px; background:#0b0d12; border:1px solid var(--line); border-radius:5px;
+                color:var(--text); font:inherit; font-size:var(--fs-s); padding:5px 8px; outline:none; }
   .timeline { padding:0 12px; }
-  .ev { display:flex; gap:8px; font-size:11px; padding:2px 0; }
-  .evt { color:var(--dim); min-width:30px; }
+  .ev { display:flex; gap:8px; font-size:var(--fs-s); padding:2px 0; }
+  .evt { color:var(--dim); min-width:34px; font-size:var(--fs-xs); }
   .evb { flex:1; color:#c9cfdd; }
-  .muted { color:var(--dim); } .pad { padding:4px 12px; font-size:11px; }
-  .empty { color:var(--dim); padding:40px 22px; text-align:center; }
-  #newtrack { width:calc(100% - 24px); margin:6px 12px; background:#0b0d12; border:1px solid var(--line);
-              border-radius:5px; color:var(--text); font:inherit; font-size:11px; padding:4px 7px; outline:none; }
-  #why { position:fixed; right:320px; top:80px; z-index:50; width:280px; background:var(--panel);
-         border:1px solid var(--line); border-radius:8px; padding:10px 12px;
-         box-shadow:0 12px 40px rgba(0,0,0,.6); font-size:11px; }
+  .muted { color:var(--dim); } .pad { padding:4px 12px; font-size:var(--fs-s); }
+  .empty { color:var(--dim); padding:40px 22px; text-align:center; font-size:var(--fs-s); }
+
+  /* sheets: new track, attach a session */
+  #modal { position:fixed; inset:0; z-index:80; background:rgba(6,8,12,.66);
+           display:flex; align-items:flex-start; justify-content:center; padding-top:8vh; }
+  #modal[hidden] { display:none; }
+  .sheet { width:min(560px, 92vw); max-height:80vh; overflow:auto; background:var(--panel);
+           border:1px solid var(--line); border-radius:10px; padding:16px 18px;
+           box-shadow:0 24px 70px rgba(0,0,0,.65); }
+  .whead { font-size:var(--fs-xs); letter-spacing:1px; color:var(--dim); margin-bottom:12px; }
+  .wlab { display:block; margin:12px 0 5px; font-size:var(--fs-xs); color:var(--dim); letter-spacing:.6px; }
+  .sheet input[type=text], .sheet input:not([type]) { width:100%; background:#0b0d12; border:1px solid var(--line);
+           border-radius:6px; color:var(--text); font:inherit; font-size:var(--fs-s); padding:7px 9px; outline:none; }
+  .sheet input:focus { border-color:var(--ON_CLAUDE); }
+  .wrow { display:flex; align-items:center; gap:9px; }
+  .wpath { flex:1; font-size:var(--fs-xs); color:#c9cfdd; overflow:hidden;
+           text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
+  .wrecent { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
+  .chip { background:#1a1e29; color:var(--dim); border:1px solid var(--line); border-radius:999px;
+          padding:3px 10px; font:inherit; font-size:var(--fs-xs); cursor:pointer; }
+  .chip.on { background:#1d2230; color:var(--text); border-color:var(--dim); }
+  .wsess { border:1px solid var(--line); border-radius:6px; padding:4px; background:#0b0d12; }
+  .wopt { display:flex; align-items:center; gap:8px; padding:5px 7px; border-radius:5px;
+          font-size:var(--fs-s); cursor:pointer; }
+  .wopt:hover { background:#161922; }
+  .wopt.off { opacity:.55; cursor:default; }
+  .wname { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .wbusy { margin-top:10px; font-size:var(--fs-xs); color:var(--ON_SYSTEM); }
+  .wacts { display:flex; justify-content:flex-end; gap:7px; margin-top:16px; }
+  .wbtn { background:#1d2230; color:var(--text); border:1px solid var(--line); border-radius:6px;
+          padding:6px 13px; font:inherit; font-size:var(--fs-s); cursor:pointer; }
+  .wbtn:hover { border-color:var(--dim); }
+  .wbtn.go { background:var(--ON_ME); border-color:var(--ON_ME); color:#1a1006; font-weight:600; }
+  .wbtn:disabled { opacity:.6; cursor:default; }
+  .wlink { display:block; margin-top:8px; background:none; border:none; padding:0; cursor:pointer;
+           color:var(--ON_CLAUDE); font:inherit; font-size:var(--fs-xs); text-align:left; }
+
+  #why { position:fixed; right:350px; top:90px; z-index:50; width:300px; background:var(--panel);
+         border:1px solid var(--line); border-radius:8px; padding:11px 13px;
+         box-shadow:0 12px 40px rgba(0,0,0,.6); font-size:var(--fs-s); }
   .whyhead { font-weight:600; margin-bottom:7px; }
-  .whyrow { display:flex; justify-content:space-between; color:var(--dim); }
+  .whyrow { display:flex; justify-content:space-between; color:var(--dim); font-size:var(--fs-xs); }
   .whyreason { margin:8px 0; color:#c9cfdd; }
   .whyacts { display:flex; flex-wrap:wrap; gap:5px; }
   .whyacts button { background:#1d2230; color:var(--text); border:1px solid var(--line);
-                    border-radius:5px; padding:3px 7px; font:inherit; font-size:10px; cursor:pointer; }
+                    border-radius:5px; padding:4px 8px; font:inherit; font-size:var(--fs-xs); cursor:pointer; }
+
+  /*
+   * The terminal is the point of the window, so as it gets narrower the chrome
+   * gives up its width first — rail, then refs panel — and the terminal column
+   * keeps whatever is left. Below 980px the refs panel stops holding a column
+   * at all and slides over the terminal instead, on demand.
+   */
+  @media (max-width: 1400px) {
+    :root { --rail:230px; }
+    .body { grid-template-columns:minmax(0,1fr) 290px; }
+  }
+  @media (max-width: 1150px) {
+    :root { --rail:180px; }
+    .body { grid-template-columns:minmax(0,1fr) 250px; }
+    .rk { min-width:0; }
+  }
+  @media (max-width: 980px) {
+    :root { --rail:150px; }
+    .body { grid-template-columns:minmax(0,1fr); }
+    .sidetoggle { display:block; }
+    .side { position:absolute; top:0; right:0; bottom:0; width:min(320px, 80vw); z-index:40;
+            background:var(--panel); border-left:1px solid var(--line);
+            box-shadow:-14px 0 34px rgba(0,0,0,.5);
+            transform:translateX(101%); transition:transform .12s ease-out; }
+    .side.open { transform:none; }
+    .side { position:absolute; padding-top:34px; }
+    .sideclose { display:block; }
+    #why { right:16px; }
+  }
+  @media (max-width: 760px) {
+    main { grid-template-columns:minmax(0,1fr); }
+    #rail { display:none; }
+    .railtop { width:auto; }
+  }
 </style>
 </head>
 <body>
   <header>
-    <span class="brand">◉ oh-my-ide</span>
+    <div class="railtop"><button id="new">+ track</button></div>
     <div id="tabs"></div>
-    <span class="pill" id="daemon">connecting…</span>
   </header>
   <main>
     <div id="rail">
-      <div class="railtop"><span class="muted" style="font-size:10px;letter-spacing:.8px">TRACKS</span>
-        <button id="new">+ new</button></div>
-      <input id="newtrack" hidden placeholder="a question works best…" />
       <div id="railbody"></div>
     </div>
     <div id="detail"></div>
   </main>
   <div id="why" hidden></div>
-  </main>
+  <div id="modal" hidden></div>
   <script src="./bundle.js"></script>
 </body>
 </html>

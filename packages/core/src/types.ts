@@ -20,6 +20,14 @@ export interface TrackRef {
   /** Adapter-normalized state that derivation reads, e.g. 'NEEDS_INPUT', 'CHANGES_REQUESTED'. */
   state: string | null;
   isBlocking: boolean;
+  /**
+   * Which session inside the track this ref belongs to (a `claude:<uuid>` id), or
+   * '' for the track as a whole. Two sessions on one track are usually working on
+   * different things — different PR, different ticket — so a ref that is true for
+   * one is not automatically true for the other. Derivation ignores this: whatever
+   * any session is blocked on still puts the whole track in someone's court.
+   */
+  sessionId: string;
 }
 
 export interface TrackSnapshot {
