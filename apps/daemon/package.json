@@ -1,0 +1,18 @@
+{
+  "name": "@omi/daemon",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsup"
+  },
+  "dependencies": {
+    "@omi/claude-adapter": "workspace:*",
+    "@omi/core": "workspace:*",
+    "@omi/db": "workspace:*",
+    "@omi/protocol": "workspace:*",
+    "better-sqlite3": "^13.0.3",
+    "node-pty": "^1.1.0",
+    "zod": "^4.1.13"
+  }
+}
