@@ -45,14 +45,24 @@ doctor() {
   if [ -x node_modules/electron/dist/electron ]; then
     printf '  %-8s %s\n' electron "$(node_modules/.bin/electron --version 2>/dev/null || echo present)"
   else
-    printf '  %-8s MISSING — run: node node_modules/electron/install.js\n' electron; ok=1
+    printf '  %-8s MISSING — run: ./start.sh build\n' electron; ok=1
   fi
   printf '  %-8s %s\n' socket "$(daemon_alive && echo "listening at $SOCKET" || echo 'not running')"
   return $ok
 }
 
+# pnpm may skip electron's own postinstall (which downloads the ~230MB binary),
+# so a fresh clone can install cleanly and still have no electron to run.
+ensure_electron() {
+  [ -x node_modules/electron/dist/electron ] && return 0
+  [ -f node_modules/electron/install.js ] || { echo "electron is not installed; run: pnpm install" >&2; return 1; }
+  echo "==> downloading the electron binary (first run only)"
+  ( cd node_modules/electron && node install.js )
+}
+
 build() {
   [ -d node_modules ] || pnpm install
+  ensure_electron
   # Order matters: apps bundle these, so a stale dist silently ships old code.
   pnpm --filter @omi/protocol --filter @omi/core --filter @omi/claude-adapter --filter @omi/db build
   pnpm --filter @omi/daemon --filter @omi/desktop build
@@ -64,6 +74,7 @@ case "${1:-run}" in
   build)  build ;;
   daemon)
     [ -f "$DAEMON_ENTRY" ] || build
+    ensure_electron || exit 1
     exec env ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/electron "$DAEMON_ENTRY"
     ;;
   status)
@@ -104,9 +115,7 @@ case "${1:-run}" in
     if [ ! -f "$DESKTOP_ENTRY" ] || [ ! -f "$DAEMON_ENTRY" ]; then
       echo "==> first run: building"; build
     fi
-    if [ ! -x node_modules/electron/dist/electron ]; then
-      echo "electron binary missing; run: node node_modules/electron/install.js" >&2; exit 1
-    fi
+    ensure_electron || exit 1
     echo "==> starting oh-my-ide (the daemon keeps running after you close the window)"
     exec node_modules/electron/dist/electron apps/desktop
     ;;

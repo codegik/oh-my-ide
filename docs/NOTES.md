@@ -126,6 +126,10 @@ mutex — Node has no `flock`.
 indistinguishable from a separator. Directory names may only enumerate candidate
 files; identity always comes from the `cwd` field *inside* the JSONL.
 
+**pnpm may skip electron's own postinstall**, so a fresh clone installs cleanly
+and still has no electron binary to run. `./start.sh` fetches it on first build;
+`./start.sh doctor` reports it. Verified from a clean clone.
+
 **`pnpm` 10 blocks lifecycle scripts by default.** Without
 `pnpm.onlyBuiltDependencies`, native modules install with no binary, silently.
 

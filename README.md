@@ -26,7 +26,12 @@ Other commands:
 | `./start.sh daemon` | run the daemon in the foreground with logs |
 | `./start.sh stop`   | stop the daemon — **Claude sessions keep running** |
 
-Requires Node 22+, pnpm, and Claude Code 2.1+ on `PATH`.
+Requires Node 22+, pnpm, and Claude Code 2.1+ on `PATH`. From a fresh clone:
+
+```sh
+pnpm install
+./start.sh            # fetches the electron binary on first run, then builds
+```
 
 ## What works today
 
