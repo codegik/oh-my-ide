@@ -219,8 +219,20 @@ function termFor(viewId: string) {
    * without this the browser's own focus traversal runs and pulls focus out of
    * the terminal — which is exactly the key the Claude CLI uses to cycle modes.
    * Returning true still lets xterm send the sequence on to the pty.
+   *
+   * xterm sends a bare CR for Shift+Enter, indistinguishable from Enter, so the
+   * Claude CLI submits instead of inserting a newline. Send ESC CR (Meta+Enter)
+   * instead, the same thing `claude /terminal-setup` binds in native terminals.
+   * All event types are swallowed so the keypress can't also emit a CR.
    */
   term.attachCustomKeyEventHandler((e) => {
+    if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      if (e.type === 'keydown') {
+        e.preventDefault();
+        window.omi.ptyInput(viewId, new TextEncoder().encode('\x1b\r'));
+      }
+      return false;
+    }
     if (e.type === 'keydown' && e.key === 'Tab') e.preventDefault();
     return true;
   });
