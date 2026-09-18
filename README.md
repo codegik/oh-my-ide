@@ -54,6 +54,14 @@ everything about that loop in one place:
 | **Court** | Whose move it is: `ON ME`, `ON CLAUDE`, `ON THEM`, `PARKED`. It's worked out for you. You can pin it, but you never have to maintain it. |
 
 Court is the important one. **Todo/doing/done can't tell you where to start. Court can.**
+
+| | |
+|---|---|
+| 🟠 **ON ME** | Claude is waiting on me |
+| 🔵 **ON CLAUDE** | the machine is thinking |
+| 🟣 **ON THEM** | waiting on another human: a review, an answer, a decision |
+| ⚪ **PARKED** | deliberately not now |
+
 When a session is thinking, the track is `ON CLAUDE`. When it's waiting on you, the track
 flips to `ON ME` and the sidebar tells you *1 needs you*. Click the chip to see which rule
 fired.
