@@ -107,6 +107,48 @@ EOF
   echo "installed $apps/oh-my-ide.desktop"
 }
 
+# macOS names a running app after its bundle's Info.plist, and unpackaged that
+# bundle is Electron.app — so the Dock and Cmd+Tab say "Electron" whatever the
+# window is called, and nothing at runtime can change it. So run from a copy
+# that is renamed: clone Electron.app (APFS clones cost no disk), rewrite its
+# name, id and icon, and re-sign it, since editing the plist breaks the seal.
+# The executable and helper apps keep Electron's names: Electron looks its
+# helpers up by those. Rebuilt whenever electron or the icon changes.
+MAC_APP="node_modules/.cache/oh-my-ide/oh-my-ide.app"
+mac_bundle() {
+  local src=node_modules/electron/dist/Electron.app icon=apps/desktop/assets/icon.png
+  local plist="$MAC_APP/Contents/Info.plist" stamp="$MAC_APP/.stamp" pb=/usr/libexec/PlistBuddy
+  # Keyed on electron's version, not file times: its unzip may keep the archive's.
+  local want; want="$($pb -c 'Print :CFBundleVersion' "$src/Contents/Info.plist")"
+  if [ "$(cat "$stamp" 2>/dev/null)" = "$want" ] && [ ! "$icon" -nt "$stamp" ]; then
+    return 0
+  fi
+  echo "==> preparing $MAC_APP"
+  rm -rf "$MAC_APP"; mkdir -p "$(dirname "$MAC_APP")"
+  cp -Rc "$src" "$MAC_APP" 2>/dev/null || { rm -rf "$MAC_APP"; cp -R "$src" "$MAC_APP"; }
+  $pb -c 'Set :CFBundleName oh-my-ide' "$plist"
+  $pb -c 'Set :CFBundleDisplayName oh-my-ide' "$plist" 2>/dev/null \
+    || $pb -c 'Add :CFBundleDisplayName string oh-my-ide' "$plist"
+  # A bundle id of its own, or LaunchServices keeps showing what it cached for Electron.
+  $pb -c 'Set :CFBundleIdentifier dev.oh-my-ide.app' "$plist"
+  # The icon Finder and the Dock show before the app is up; main.ts sets it again at runtime.
+  local set; set="$(mktemp -d)/icon.iconset"; mkdir -p "$set"
+  for s in 16 32 128 256 512; do
+    sips -z $s $s "$icon" --out "$set/icon_${s}x${s}.png" >/dev/null
+    sips -z $((s * 2)) $((s * 2)) "$icon" --out "$set/icon_${s}x${s}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$set" -o "$MAC_APP/Contents/Resources/electron.icns" || echo "   (icon not converted; keeping Electron's)"
+  rm -rf "$(dirname "$set")"
+  codesign --force --deep --sign - "$MAC_APP" >/dev/null 2>&1 || echo "   (re-signing failed; the app may refuse to start)"
+  touch "$MAC_APP"
+  echo "$want" >"$stamp"
+}
+
+electron_bin() {
+  if [ "$(uname)" = Darwin ]; then mac_bundle >&2 && echo "$MAC_APP/Contents/MacOS/Electron"
+  else echo node_modules/.bin/electron; fi
+}
+
 case "${1:-run}" in
   -h|--help|help) usage ;;
   doctor) echo "oh-my-ide prerequisites:"; doctor ;;
@@ -177,7 +219,8 @@ case "${1:-run}" in
     fi
     ensure_electron || exit 1
     echo "==> starting oh-my-ide (the daemon keeps running after you close the window)"
-    exec node_modules/.bin/electron apps/desktop
+    bin="$(electron_bin)"
+    exec "$bin" apps/desktop
     ;;
   *) usage; exit 1 ;;
 esac
