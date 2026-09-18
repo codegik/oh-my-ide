@@ -2,7 +2,9 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron';
+import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import {
   FRAME_CONTROL,
   FRAME_PTY_OUT,
@@ -19,6 +21,41 @@ app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
 app.commandLine.appendSwitch('enable-features', 'WaylandWindowDecorations');
 
 const DAEMON_ENTRY = path.join(__dirname, '..', '..', 'daemon', 'dist', 'index.cjs');
+const RENDERER_HTML = path.join(__dirname, '..', 'renderer', 'index.html');
+const RENDERER_URL = pathToFileURL(RENDERER_HTML).href;
+
+/**
+ * The app is one page, and the preload runs in whatever page a window shows. A
+ * dropped file, a clicked link or an injected script that replaced it would
+ * inherit `window.omi` — which can type into any Claude session. So nothing is
+ * allowed to navigate, open a window, or embed a webview. `loadFile` does not
+ * fire `will-navigate`, so blocking every navigation costs us nothing.
+ */
+app.on('web-contents-created', (_e, contents) => {
+  contents.on('will-navigate', (e) => e.preventDefault());
+  contents.on('will-redirect', (e) => e.preventDefault());
+  contents.on('will-attach-webview', (e) => e.preventDefault());
+  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+});
+
+/**
+ * Second line behind the navigation lock: only our own page, in its top frame,
+ * may drive the daemon. The fragment is ignored so in-page hash changes pass.
+ */
+function fromApp(e: IpcMainEvent | IpcMainInvokeEvent): boolean {
+  const frame = e.senderFrame;
+  if (!frame || frame !== e.sender.mainFrame) return false;
+  return frame.url.split('#')[0] === RENDERER_URL;
+}
+
+function guard<A extends unknown[], R>(
+  fn: (e: IpcMainInvokeEvent, ...args: A) => R,
+): (e: IpcMainInvokeEvent, ...args: A) => R {
+  return (e, ...args) => {
+    if (!fromApp(e)) throw new Error('ipc from an untrusted frame');
+    return fn(e, ...args);
+  };
+}
 
 /** Main is a dumb frame proxy: it owns the socket, the renderer owns no Node. */
 class DaemonClient {
@@ -196,20 +233,23 @@ function createWindow(): void {
       nodeIntegration: false,
     },
   });
-  void win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  void win.loadFile(RENDERER_HTML);
 }
 
 app.whenReady().then(async () => {
-  ipcMain.handle('omi:rpc', (_e, method: string, params?: unknown) => client.rpc(method, params));
-  ipcMain.handle('omi:welcome', () => client.whenWelcome());
-  ipcMain.handle('omi:openExternal', (_e, url: string) => shell.openExternal(url));
+  ipcMain.handle(
+    'omi:rpc',
+    guard((_e, method: string, params?: unknown) => client.rpc(method, params)),
+  );
+  ipcMain.handle('omi:welcome', guard(() => client.whenWelcome()));
+  ipcMain.handle('omi:openExternal', guard((_e, url: string) => shell.openExternal(url)));
   /**
    * A native folder picker, not a text field: a track's folder decides which
    * sessions it can even see, and a typo there is a track pointed at nothing.
    * The dialog is modal to the window, which is safe — unlike a JS dialog in the
    * renderer, it does not block the terminals.
    */
-  ipcMain.handle('omi:pickFolder', async (e, startIn?: string) => {
+  ipcMain.handle('omi:pickFolder', guard(async (e, startIn?: string) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const opts = {
       title: 'choose a folder',
@@ -220,10 +260,10 @@ app.whenReady().then(async () => {
       ? await dialog.showOpenDialog(win, opts)
       : await dialog.showOpenDialog(opts);
     return r.canceled ? null : (r.filePaths[0] ?? null);
+  }));
+  ipcMain.on('omi:ptyInput', (e, viewId: string, bytes: Uint8Array) => {
+    if (fromApp(e)) client.ptyInput(viewId, bytes);
   });
-  ipcMain.on('omi:ptyInput', (_e, viewId: string, bytes: Uint8Array) =>
-    client.ptyInput(viewId, bytes),
-  );
 
   try {
     await client.connect();
