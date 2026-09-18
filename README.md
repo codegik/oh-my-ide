@@ -13,6 +13,12 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/Arch_Linux-supported-1793D1?logo=archlinux&logoColor=white" alt="Arch Linux supported">
+  <img src="https://img.shields.io/badge/macOS-supported-000000?logo=apple&logoColor=white" alt="macOS supported">
+  <img src="https://img.shields.io/badge/Wayland-native-FFBC00?logo=wayland&logoColor=black" alt="Wayland native">
+</p>
+
+<p align="center">
   <a href="docs/media/demo.mp4">
     <img src="docs/media/demo.gif" alt="oh-my-ide demo: two tracks, each driving its own live Claude Code session" width="100%">
   </a>
@@ -85,7 +91,8 @@ Nothing is locked in.
 
 ## Quick start
 
-Requires **Node 22+**, **pnpm**, and **Claude Code 2.1+** on `PATH`.
+Runs on **Arch Linux** and **macOS** (see [Platforms](#platforms)). Requires **Node 22+**,
+**pnpm**, and **Claude Code 2.1+** on `PATH`.
 
 ```sh
 git clone git@github.com:codegik/oh-my-ide.git && cd oh-my-ide
@@ -104,7 +111,43 @@ the app never costs you a session.
 | `./start.sh build`   | force a rebuild |
 | `./start.sh daemon`  | run the daemon in the foreground with logs |
 | `./start.sh stop`    | stop the daemon (**Claude sessions keep running**) |
-| `./start.sh install` | add oh-my-ide to the app launcher (walker, etc.) with its icon |
+| `./start.sh install` | add oh-my-ide to the app launcher (walker, etc.) with its icon (Linux) |
+
+## Platforms
+
+oh-my-ide runs on **Arch Linux** and **macOS**. Both use the same `./start.sh`, which
+detects the OS and handles the differences.
+
+### Arch Linux
+
+```sh
+sudo pacman -S --needed git nodejs pnpm   # or bring your own node via nvm / mise
+```
+
+- **Native Wayland.** Electron is started with the Ozone platform hint, so on Hyprland,
+  Sway or GNOME it renders natively instead of blurry through XWayland.
+- **Launcher entry.** `./start.sh install` writes `~/.local/share/applications/oh-my-ide.desktop`
+  with the app icon, so it shows up in walker, rofi, fuzzel or your desktop's app grid.
+- **Works when node comes from nvm / mise.** A launcher doesn't get your shell's `PATH`, so
+  `start.sh` borrows it from your login shell. If a launch from the menu does nothing, the
+  reason is in `~/.local/state/oh-my-ide/start.log` (and in a desktop notification, if
+  `notify-send` is installed).
+- **Matches your desktop's font size.** On GNOME-style desktops the UI reads your text size
+  from `gsettings`, so the app is as readable as the rest of your system.
+
+Other Linux distributions should work the same way, but Arch is the one it's built and tested on.
+
+### macOS
+
+```sh
+brew install node pnpm   # or bring your own node via nvm / mise
+```
+
+- **A real app name and icon.** An unpackaged Electron app shows up as "Electron" in the
+  Dock and Cmd+Tab. `start.sh` runs from a renamed, re-signed copy of the Electron bundle
+  (an APFS clone, so it takes no extra disk), so you see **oh-my-ide** with its own icon.
+- **Native macOS menu bar**, kept as macOS apps expect (it's removed on Linux).
+- Everything else works the same as on Linux: the same daemon, Unix socket and SQLite file.
 
 ## Status
 
