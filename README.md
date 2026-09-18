@@ -25,6 +25,7 @@ Other commands:
 | `./start.sh build`  | force a rebuild |
 | `./start.sh daemon` | run the daemon in the foreground with logs |
 | `./start.sh stop`   | stop the daemon — **Claude sessions keep running** |
+| `./start.sh install` | add oh-my-ide to the app launcher (walker, etc.) with its icon |
 
 Requires Node 22+, pnpm, and Claude Code 2.1+ on `PATH`. From a fresh clone:
 

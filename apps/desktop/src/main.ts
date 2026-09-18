@@ -24,6 +24,7 @@ app.commandLine.appendSwitch('enable-features', 'WaylandWindowDecorations');
 const DAEMON_ENTRY = path.join(__dirname, '..', '..', 'daemon', 'dist', 'index.cjs');
 const RENDERER_HTML = path.join(__dirname, '..', 'renderer', 'index.html');
 const RENDERER_URL = pathToFileURL(RENDERER_HTML).href;
+const ICON = path.join(__dirname, '..', 'assets', 'icon.png');
 
 /**
  * The app is one page, and the preload runs in whatever page a window shows. A
@@ -328,6 +329,9 @@ function createWindow(): void {
     height: 880,
     backgroundColor: '#0f1115',
     title: 'oh-my-ide',
+    // X11 and taskbars read this. Wayland ignores it and looks the icon up via the
+    // .desktop file named by the app id (see `desktopName`, `./start.sh install`).
+    icon: ICON,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

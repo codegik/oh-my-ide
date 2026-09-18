@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "main": "dist/main.cjs",
+  "desktopName": "oh-my-ide.desktop",
   "scripts": {
     "build": "tsup && node -e \"const fs=require('fs'),p=require.resolve('@xterm/xterm/css/xterm.css');fs.copyFileSync(p,'renderer/xterm.css');console.log('copied xterm.css')\"",
     "start": "electron ."

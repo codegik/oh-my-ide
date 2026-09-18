@@ -23,6 +23,7 @@ usage: ./start.sh [command]
   status         show whether the daemon is listening, and list sessions
   stop           stop the daemon (Claude sessions keep running)
   doctor         check prerequisites
+  install        add oh-my-ide to the app launcher, with its icon
 EOF
 }
 
@@ -85,10 +86,32 @@ build() {
   pnpm --filter @omi/daemon --filter @omi/desktop build
 }
 
+# The app id is `desktopName` in apps/desktop/package.json minus ".desktop";
+# Wayland compositors find the window's icon through the entry of that name.
+# Both paths point into this checkout, so re-run this after moving it.
+install_desktop_entry() {
+  local apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+  mkdir -p "$apps"
+  cat >"$apps/oh-my-ide.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=oh-my-ide
+Comment=A local-first cockpit for parallel Claude Code sessions
+Exec=$PWD/start.sh
+Icon=$PWD/apps/desktop/assets/icon.png
+StartupWMClass=oh-my-ide
+Terminal=false
+Categories=Development;IDE;
+EOF
+  have update-desktop-database && update-desktop-database "$apps" 2>/dev/null || true
+  echo "installed $apps/oh-my-ide.desktop"
+}
+
 case "${1:-run}" in
   -h|--help|help) usage ;;
   doctor) echo "oh-my-ide prerequisites:"; doctor ;;
   build)  build ;;
+  install) install_desktop_entry ;;
   daemon)
     stale && build
     ensure_electron || exit 1
