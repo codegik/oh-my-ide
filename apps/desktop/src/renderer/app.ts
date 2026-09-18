@@ -840,9 +840,6 @@ function patchSide(t: Track, session: Ref | undefined) {
 
   $('sidetop').innerHTML = `
     <div id="refs">
-      ${refs.length === 0
-        ? `<div class="muted pad">nothing linked to ${session ? 'this session' : 'this track'} yet</div>`
-        : ''}
       ${refs.map(refRow).join('')}
     </div>`;
 
