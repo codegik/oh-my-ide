@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TitleScanner, cleanTitle } from '../src/pty.js';
+import { cleanTitle, TitleScanner } from '../src/pty.js';
 
 /**
  * The CLI never renames a session, but it does publish a running summary of the
@@ -36,7 +36,11 @@ describe('TitleScanner', () => {
   it('abandons a title interrupted by another escape, instead of splicing', () => {
     // This is the bug the state machine exists for: a started-then-abandoned
     // title must not be completed by an unrelated BEL later in the stream.
-    expect(feed('\x1b]0;half a tit', '\x1b[2Kredraw', 'Reply session\x07')).toEqual([null, null, null]);
+    expect(feed('\x1b]0;half a tit', '\x1b[2Kredraw', 'Reply session\x07')).toEqual([
+      null,
+      null,
+      null,
+    ]);
   });
 
   it('gives nothing for plain output or a title of only decoration', () => {

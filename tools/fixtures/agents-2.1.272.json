@@ -1,17 +1,47 @@
 [
-  { "id": "aaaaaaaa", "cwd": "/home/dev/src/alpha", "kind": "background",
-    "startedAt": 1782823698391, "sessionId": "aaaaaaaa-a491-4d66-8086-abf4642f4aff",
-    "name": "Investigate retry storm", "state": "blocked" },
-  { "id": "bbbbbbbb", "cwd": "/home/dev/src/beta", "kind": "background",
-    "startedAt": 1787764100883, "sessionId": "bbbbbbbb-428c-4354-bb62-8a732083bbe8",
-    "name": "Add bank selection", "state": "done", "status": "idle", "pid": 3799005 },
-  { "pid": 3705704, "cwd": "/home/dev/src/gamma", "kind": "interactive",
-    "startedAt": 1789673331768, "sessionId": "cccccccc-6dec-44c5-a6fd-d79ac87ef28f",
-    "name": "gamma-77", "status": "idle" },
-  { "pid": 3712803, "cwd": "/home/dev/src/delta", "kind": "interactive",
-    "startedAt": 1789673486560, "sessionId": "dddddddd-a90e-4829-b711-c7a0d0639cb3",
-    "name": "delta-cockpit", "status": "busy" },
-  { "kind": "background", "sessionId": "eeeeeeee-1111-2222-3333-444444444444",
-    "cwd": "/home/dev/src/eps", "state": "some-future-state-we-dont-know" },
+  {
+    "id": "aaaaaaaa",
+    "cwd": "/home/dev/src/alpha",
+    "kind": "background",
+    "startedAt": 1782823698391,
+    "sessionId": "aaaaaaaa-a491-4d66-8086-abf4642f4aff",
+    "name": "Investigate retry storm",
+    "state": "blocked"
+  },
+  {
+    "id": "bbbbbbbb",
+    "cwd": "/home/dev/src/beta",
+    "kind": "background",
+    "startedAt": 1787764100883,
+    "sessionId": "bbbbbbbb-428c-4354-bb62-8a732083bbe8",
+    "name": "Add bank selection",
+    "state": "done",
+    "status": "idle",
+    "pid": 3799005
+  },
+  {
+    "pid": 3705704,
+    "cwd": "/home/dev/src/gamma",
+    "kind": "interactive",
+    "startedAt": 1789673331768,
+    "sessionId": "cccccccc-6dec-44c5-a6fd-d79ac87ef28f",
+    "name": "gamma-77",
+    "status": "idle"
+  },
+  {
+    "pid": 3712803,
+    "cwd": "/home/dev/src/delta",
+    "kind": "interactive",
+    "startedAt": 1789673486560,
+    "sessionId": "dddddddd-a90e-4829-b711-c7a0d0639cb3",
+    "name": "delta-cockpit",
+    "status": "busy"
+  },
+  {
+    "kind": "background",
+    "sessionId": "eeeeeeee-1111-2222-3333-444444444444",
+    "cwd": "/home/dev/src/eps",
+    "state": "some-future-state-we-dont-know"
+  },
   { "this": "row", "is": "malformed" }
 ]

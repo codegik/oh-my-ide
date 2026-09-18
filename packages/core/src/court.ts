@@ -48,7 +48,11 @@ const RULES: Rule[] = [
     id: 'claude.needs_input',
     match: (r) =>
       r.kind === 'claude_session' && r.state === 'NEEDS_INPUT'
-        ? { court: 'ON_ME', weight: 80, reason: 'a session finished its turn and is waiting on you' }
+        ? {
+            court: 'ON_ME',
+            weight: 80,
+            reason: 'a session finished its turn and is waiting on you',
+          }
         : null,
   },
   {
@@ -137,9 +141,7 @@ export function derive(t: TrackSnapshot, now: number): Derivation {
     };
   }
 
-  candidates.sort(
-    (a, b) => b.weight - a.weight || COURT_ORDER[a.court] - COURT_ORDER[b.court],
-  );
+  candidates.sort((a, b) => b.weight - a.weight || COURT_ORDER[a.court] - COURT_ORDER[b.court]);
   return candidates[0] as Derivation;
 }
 
@@ -164,14 +166,24 @@ export function effective(t: TrackSnapshot, now: number): Effective {
     if (pin.kind === 'park') {
       const awake = t.snoozeUntil !== null && now >= t.snoozeUntil;
       if (!awake) return { court: 'PARKED', source: 'park', derivation: d, released: null };
-      return { court: d.court, source: 'derived', derivation: d, released: { reason: 'wake_condition_met' } };
+      return {
+        court: d.court,
+        source: 'derived',
+        derivation: d,
+        released: { reason: 'wake_condition_met' },
+      };
     }
     if (pin.kind === 'hard') {
       if (d.weight <= pin.overrideWeight)
         return { court: pin.court, source: 'pin', derivation: d, released: null };
       // A high-weight signal breaks a pin — otherwise a pin could hide a session
       // that is actively blocked on you.
-      return { court: d.court, source: 'derived', derivation: d, released: { reason: 'signal_override' } };
+      return {
+        court: d.court,
+        source: 'derived',
+        derivation: d,
+        released: { reason: 'signal_override' },
+      };
     }
     // snooze
     const expired = pin.expiresAt !== null && now >= pin.expiresAt;

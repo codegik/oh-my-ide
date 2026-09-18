@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LineDecoder, encodeLine } from '../src/index.js';
+import { encodeLine, LineDecoder } from '../src/index.js';
 
 describe('LineDecoder', () => {
   it('holds an incomplete trailing line across chunks', () => {
@@ -9,7 +9,10 @@ describe('LineDecoder', () => {
   });
 
   it('survives a split at every possible byte boundary', () => {
-    const msgs = [{ t: 'hello', protocol: 1 }, { t: 'rpc', id: 7, method: 'sessions.list' }];
+    const msgs = [
+      { t: 'hello', protocol: 1 },
+      { t: 'rpc', id: 7, method: 'sessions.list' },
+    ];
     const wire = msgs.map(encodeLine).join('');
     // A socket read boundary lands mid-message often enough that not buffering
     // is a guaranteed bug, so prove every split works.

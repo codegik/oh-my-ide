@@ -156,8 +156,8 @@
   .sidetoggle:hover { color:var(--text); border-color:var(--dim); }
   .sideclose { display:none; position:absolute; top:6px; right:8px; z-index:2;
                background:#1d2230; color:var(--text); border:1px solid var(--line);
-               border-radius:5px; width:26px; height:26px; line-height:1; cursor:pointer;
-               font:inherit; font-size:var(--fs-s); }
+               border-radius:5px; width:26px; height:26px; cursor:pointer;
+               font:inherit; font-size:var(--fs-s); line-height:1; }
   .sideclose:hover { border-color:var(--dim); color:#ff8f75; }
   .side { overflow:auto; display:flex; flex-direction:column; }
   .shead { padding:9px 12px 4px; color:var(--dim); font-size:var(--fs-xs); letter-spacing:.8px; }
@@ -288,9 +288,9 @@
 </head>
 <body>
   <header>
-    <div class="railtop"><button id="new">+ track</button></div>
+    <div class="railtop"><button type="button" id="new">+ track</button></div>
     <div id="tabs" class="tabscroll"></div>
-    <button id="tabsmore" class="tabmore" hidden title="all open tracks">▾</button>
+    <button type="button" id="tabsmore" class="tabmore" hidden title="all open tracks">▾</button>
   </header>
   <main>
     <div id="rail">

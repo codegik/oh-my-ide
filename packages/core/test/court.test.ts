@@ -39,10 +39,7 @@ describe('derive', () => {
   it('a blocked session outranks a running one', () => {
     const d = derive(
       track({
-        refs: [
-          ref({ id: 1, state: 'WORKING' }),
-          ref({ id: 2, state: 'NEEDS_PERMISSION' }),
-        ],
+        refs: [ref({ id: 1, state: 'WORKING' }), ref({ id: 2, state: 'NEEDS_PERMISSION' })],
       }),
       NOW,
     );

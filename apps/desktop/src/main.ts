@@ -4,17 +4,17 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { BrowserWindow, app, ipcMain, shell } from 'electron';
-import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import {
+  encodeControl,
+  encodePtyIn,
   FRAME_CONTROL,
   FRAME_PTY_OUT,
   FrameDecoder,
   PROTOCOL_VERSION,
-  encodeControl,
-  encodePtyIn,
   socketPath,
 } from '@omi/protocol';
+import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 
 // Hyprland/Wayland: without these Electron renders through XWayland and is blurry
 // at fractional scaling.
@@ -265,7 +265,9 @@ const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 const LIST_LIMIT = 2000;
 
-async function listDir(raw: string): Promise<{ home: string; path: string; dirs: string[] } | null> {
+async function listDir(
+  raw: string,
+): Promise<{ home: string; path: string; dirs: string[] } | null> {
   if (typeof raw !== 'string') return null;
   const home = os.homedir();
   const expanded = raw === '~' || raw.startsWith('~/') ? home + raw.slice(1) : raw;
@@ -311,7 +313,7 @@ function osFontPx(key: 'font-name' | 'monospace-font-name'): number | null {
     const pt = Number(/(\d+(?:\.\d+)?)'?$/.exec(get(key))?.[1]);
     if (!Number.isFinite(pt) || pt <= 0) return null;
     const scaling = Number(get('text-scaling-factor')) || 1;
-    const px = (pt * 96) / 72 * scaling;
+    const px = ((pt * 96) / 72) * scaling;
     return px >= 8 && px <= 40 ? Math.round(px * 100) / 100 : null;
   } catch {
     return null;
@@ -346,9 +348,18 @@ app.whenReady().then(async () => {
     'omi:rpc',
     guard((_e, method: string, params?: unknown) => client.rpc(method, params)),
   );
-  ipcMain.handle('omi:welcome', guard(() => client.whenWelcome()));
-  ipcMain.handle('omi:openExternal', guard((_e, url: string) => shell.openExternal(url)));
-  ipcMain.handle('omi:listDir', guard((_e, raw: string) => listDir(raw)));
+  ipcMain.handle(
+    'omi:welcome',
+    guard(() => client.whenWelcome()),
+  );
+  ipcMain.handle(
+    'omi:openExternal',
+    guard((_e, url: string) => shell.openExternal(url)),
+  );
+  ipcMain.handle(
+    'omi:listDir',
+    guard((_e, raw: string) => listDir(raw)),
+  );
   ipcMain.on('omi:ptyInput', (e, viewId: string, bytes: Uint8Array) => {
     if (fromApp(e)) client.ptyInput(viewId, bytes);
   });

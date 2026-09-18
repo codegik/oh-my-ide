@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CLAUDE_HOME, DeniedPathError, assertReadable } from '../src/safe-fs.js';
+import { assertReadable, CLAUDE_HOME, DeniedPathError } from '../src/safe-fs.js';
 
 const inHome = (...p: string[]) => path.join(CLAUDE_HOME, ...p);
 

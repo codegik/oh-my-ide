@@ -24,7 +24,10 @@ declare global {
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const esc = (s: unknown) =>
-  String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string);
+  String(s ?? '').replace(
+    /[&<>"]/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string,
+  );
 
 const ago = (ms: number) => {
   if (!ms) return '';
@@ -50,27 +53,51 @@ function shortPath(full: string): string {
 }
 
 const COURT_LABEL: Record<string, string> = {
-  ON_ME: 'ON ME', ON_CLAUDE: 'ON CLAUDE', ON_SYSTEM: 'ON SYSTEM',
-  ON_THEM: 'ON THEM', PARKED: 'PARKED', DONE: 'DONE', DROPPED: 'DROPPED',
+  ON_ME: 'ON ME',
+  ON_CLAUDE: 'ON CLAUDE',
+  ON_SYSTEM: 'ON SYSTEM',
+  ON_THEM: 'ON THEM',
+  PARKED: 'PARKED',
+  DONE: 'DONE',
+  DROPPED: 'DROPPED',
 };
 
 /** Whose court a session state puts the ball in; drives the session dot colour. */
 const STATE_COURT: Record<string, string> = {
-  NEEDS_INPUT: 'ON_ME', NEEDS_PERMISSION: 'ON_ME', FAILED: 'ON_ME',
-  WORKING: 'ON_CLAUDE', STARTING: 'ON_CLAUDE',
-  IDLE: 'PARKED', STOPPED: 'PARKED', RESUMABLE: 'PARKED', UNKNOWN: 'PARKED',
+  NEEDS_INPUT: 'ON_ME',
+  NEEDS_PERMISSION: 'ON_ME',
+  FAILED: 'ON_ME',
+  WORKING: 'ON_CLAUDE',
+  STARTING: 'ON_CLAUDE',
+  IDLE: 'PARKED',
+  STOPPED: 'PARKED',
+  RESUMABLE: 'PARKED',
+  UNKNOWN: 'PARKED',
 };
 
 interface Ref {
-  id: number; kind: string; externalId: string; url: string | null;
-  label: string | null; state: string | null; sessionId: string;
+  id: number;
+  kind: string;
+  externalId: string;
+  url: string | null;
+  label: string | null;
+  state: string | null;
+  sessionId: string;
 }
 
 interface Track {
-  id: number; title: string; question: string | null; nextAction: string | null;
-  court: string; courtReason: string | null; courtRule: string | null; courtSource: string;
+  id: number;
+  title: string;
+  question: string | null;
+  nextAction: string | null;
+  court: string;
+  courtReason: string | null;
+  courtRule: string | null;
+  courtSource: string;
   lifecycle: 'open' | 'done' | 'dropped';
-  originUrl: string | null; lastActivityAt: number; cwd: string | null;
+  originUrl: string | null;
+  lastActivityAt: number;
+  cwd: string | null;
   archivedAt: number | null;
   refs: Ref[];
 }
@@ -106,17 +133,22 @@ let starting: number | null = null;
 function saveTabs() {
   try {
     localStorage.setItem('omi.tabs', JSON.stringify({ openTabs, activeTab, activeSession }));
-  } catch { /* a lost tab set is not worth an error */ }
+  } catch {
+    /* a lost tab set is not worth an error */
+  }
 }
 function loadTabs() {
   try {
     const raw = localStorage.getItem('omi.tabs');
     if (!raw) return;
     const v = JSON.parse(raw);
-    if (Array.isArray(v.openTabs)) openTabs = v.openTabs.filter((n: unknown) => typeof n === 'number');
+    if (Array.isArray(v.openTabs))
+      openTabs = v.openTabs.filter((n: unknown) => typeof n === 'number');
     if (typeof v.activeTab === 'number') activeTab = v.activeTab;
     if (v.activeSession && typeof v.activeSession === 'object') activeSession = v.activeSession;
-  } catch { /* corrupt or unavailable: start clean */ }
+  } catch {
+    /* corrupt or unavailable: start clean */
+  }
 }
 
 /**
@@ -126,7 +158,10 @@ function loadTabs() {
  * makes switching sessions inside a track free: each session keeps its own live
  * terminal, detached from the DOM but never torn down.
  */
-const terms = new Map<string, { term: Terminal; fit: FitAddon; el: HTMLDivElement; expect: bigint; epoch: number }>();
+const terms = new Map<
+  string,
+  { term: Terminal; fit: FitAddon; el: HTMLDivElement; expect: bigint; epoch: number }
+>();
 
 /**
  * Fitting is only meaningful once the host element is laid out. A detached or
@@ -167,7 +202,9 @@ function termFor(viewId: string) {
   if (t) return t;
   const term = new Terminal({
     fontFamily: '"JetBrains Mono","Fira Code",monospace',
-    fontSize: TERM_FONT_PX, scrollback: 10_000, cursorBlink: true,
+    fontSize: TERM_FONT_PX,
+    scrollback: 10_000,
+    cursorBlink: true,
     theme: { background: '#0b0d12', foreground: '#e6e9f0' },
   });
   const fit = new FitAddon();
@@ -207,7 +244,11 @@ window.omi.onPty((viewId, epoch, offset, bytes) => {
   const t = terms.get(viewId);
   if (!t) return;
   const off = BigInt(offset);
-  if (epoch !== t.epoch) { t.term.reset(); t.epoch = epoch; t.expect = off; }
+  if (epoch !== t.epoch) {
+    t.term.reset();
+    t.epoch = epoch;
+    t.expect = off;
+  }
   if (t.expect >= 0n && off !== t.expect) {
     // A gap means we lost bytes; a partial repaint would be worse than a reset.
     t.term.reset();
@@ -223,7 +264,10 @@ window.omi.onPty((viewId, epoch, offset, bytes) => {
  * second, worse copy of that — one that repaints while you are typing.
  */
 window.omi.onEvent((msg) => {
-  if (msg?.t === 'changed') { void refresh(); return; }
+  if (msg?.t === 'changed') {
+    void refresh();
+    return;
+  }
   if (msg?.t === 'reconnected') {
     // The daemon came back, which means every pty view it owned is gone. Drop
     // what we think is open and let the next render re-attach; the Terminal
@@ -247,7 +291,9 @@ const liveSession = (ref: { externalId: string }) => {
   const id = sessionIdOf(ref);
   // By job too, not just UUID: a background session that moves into a worktree
   // is listed under a new UUID, but keeps the short id it was launched with.
-  return sessions.find((s) => s.sessionId === id || (s.kind === 'background' && s.shortId === shortIdOf(id)));
+  return sessions.find(
+    (s) => s.sessionId === id || (s.kind === 'background' && s.shortId === shortIdOf(id)),
+  );
 };
 const isAttachable = (ref: { externalId: string }) => liveSession(ref)?.kind === 'background';
 
@@ -291,10 +337,12 @@ const railRow = (t: Track, closed = false) => `
     <span class="dot ${dotOf(t)}"></span>
     <span class="tname">${esc(t.title)}</span>
     <span class="tago">${ago(t.lastActivityAt)}</span>
-    ${closed
-      ? `<button class="tarch" data-archive="${t.id}" title="archive — hide it from this list"
+    ${
+      closed
+        ? `<button class="tarch" data-archive="${t.id}" title="archive — hide it from this list"
                  aria-label="archive ${esc(t.title)}">${ICON_ARCHIVE}</button>`
-      : ''}
+        : ''
+    }
   </div>`;
 
 /**
@@ -310,8 +358,9 @@ const railRow = (t: Track, closed = false) => `
 function renderRail() {
   const needs = tracks.filter((t) => t.court === 'ON_ME').length;
 
-  const sig = tracks.map((t) => `${t.id}/${t.title}/${dotOf(t)}/${ago(t.lastActivityAt)}`).join(',')
-    + `|${activeTab}|${doneOpen}|${closedTracks.map((t) => t.id).join(',')}|${archivedTracks.length}`;
+  const sig =
+    tracks.map((t) => `${t.id}/${t.title}/${dotOf(t)}/${ago(t.lastActivityAt)}`).join(',') +
+    `|${activeTab}|${doneOpen}|${closedTracks.map((t) => t.id).join(',')}|${archivedTracks.length}`;
   if (railSig === sig) return;
   railSig = sig;
 
@@ -327,14 +376,19 @@ function renderRail() {
       <span>done</span>
       <span class="tago">${doneOpen ? closedTracks.length || '' : ''}</span>
     </div>
-    ${doneOpen
-      ? (closedTracks.map((t) => railRow(t, true)).join('') || '<div class="pad muted">nothing finished yet</div>')
-        + archived
-      : ''}`;
+    ${
+      doneOpen
+        ? (
+            closedTracks.map((t) => railRow(t, true)).join('') ||
+              '<div class="pad muted">nothing finished yet</div>'
+          ) + archived
+        : ''
+    }`;
 
-  $('railbody').innerHTML = tracks.length === 0 && !doneOpen
-    ? '<div class="empty">No tracks yet.<br><br>Press <b>+ track</b> to make one.</div>' + done
-    : `<div class="railhead">
+  $('railbody').innerHTML =
+    tracks.length === 0 && !doneOpen
+      ? '<div class="empty">No tracks yet.<br><br>Press <b>+ track</b> to make one.</div>' + done
+      : `<div class="railhead">
          <span>${tracks.length} open</span>
          ${needs > 0 ? `<span class="needs">${needs} need${needs === 1 ? 's' : ''} you</span>` : ''}
        </div>
@@ -351,7 +405,9 @@ function renderRail() {
       void archiveFromRail(Number(b.dataset.archive), b);
     };
   }
-  $('donetoggle').onclick = () => { void toggleDone(); };
+  $('donetoggle').onclick = () => {
+    void toggleDone();
+  };
   const arch = document.getElementById('archivedopen');
   if (arch) arch.onclick = () => openArchiveSheet();
 }
@@ -435,7 +491,8 @@ function wireTabStrip(scroller: HTMLElement, more: HTMLButtonElement, itemSel: s
   // Settle the ▾ first: showing it narrows the row, and scrolling the active tab
   // into view before that would leave it half behind the edge.
   sync();
-  scroller.querySelector<HTMLElement>(`${itemSel}.on`)
+  scroller
+    .querySelector<HTMLElement>(`${itemSel}.on`)
     ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   sync();
 }
@@ -449,15 +506,20 @@ function closeTabMenu() {
 
 function toggleTabMenu(anchor: HTMLElement, scroller: HTMLElement, itemSel: string) {
   const menu = $('tabmenu');
-  if (!menu.hidden && menu.dataset.for === anchor.id) { closeTabMenu(); return; }
+  if (!menu.hidden && menu.dataset.for === anchor.id) {
+    closeTabMenu();
+    return;
+  }
   closeTabMenu();
   const items = [...scroller.querySelectorAll<HTMLElement>(itemSel)];
-  menu.innerHTML = items.map((el, i) => {
-    const dot = el.querySelector('.dot')?.className ?? 'dot';
-    const label = el.querySelector('.tlabel, .sname')?.textContent ?? '';
-    return `<button class="tmi ${el.classList.contains('on') ? 'on' : ''}" data-i="${i}"
+  menu.innerHTML = items
+    .map((el, i) => {
+      const dot = el.querySelector('.dot')?.className ?? 'dot';
+      const label = el.querySelector('.tlabel, .sname')?.textContent ?? '';
+      return `<button class="tmi ${el.classList.contains('on') ? 'on' : ''}" data-i="${i}"
                     title="${esc(label)}"><span class="${esc(dot)}"></span><span class="tml">${esc(label)}</span></button>`;
-  }).join('');
+    })
+    .join('');
   for (const b of menu.querySelectorAll<HTMLElement>('.tmi')) {
     b.onclick = () => {
       const el = items[Number(b.dataset.i)];
@@ -477,27 +539,34 @@ function toggleTabMenu(anchor: HTMLElement, scroller: HTMLElement, itemSel: stri
 }
 
 function renderTabs() {
-  const sig = openTabs
-    .map((id) => {
-      const t = tracks.find((x) => x.id === id);
-      return `${id}/${t?.title ?? ''}/${t ? dotOf(t) : ''}`;
-    })
-    .join(',') + `|${activeTab}`;
+  const sig =
+    openTabs
+      .map((id) => {
+        const t = tracks.find((x) => x.id === id);
+        return `${id}/${t?.title ?? ''}/${t ? dotOf(t) : ''}`;
+      })
+      .join(',') + `|${activeTab}`;
   if (tabsSig === sig) return;
   tabsSig = sig;
 
-  $('tabs').innerHTML = openTabs.map((id) => {
-    const t = tracks.find((x) => x.id === id);
-    if (!t) return '';
-    return `<div class="tab ${activeTab === id ? 'on' : ''}" data-id="${id}">
+  $('tabs').innerHTML = openTabs
+    .map((id) => {
+      const t = tracks.find((x) => x.id === id);
+      if (!t) return '';
+      return `<div class="tab ${activeTab === id ? 'on' : ''}" data-id="${id}">
       <span class="dot ${dotOf(t)}"></span><span class="tlabel" title="${esc(t.title)}">${esc(t.title)}</span><span class="x" data-close="${id}">×</span></div>`;
-  }).join('');
+    })
+    .join('');
   wireTabStrip($('tabs'), $<HTMLButtonElement>('tabsmore'), '.tab');
 
   for (const el of document.querySelectorAll<HTMLElement>('.tab')) {
     el.onclick = (e) => {
       const close = (e.target as HTMLElement).dataset.close;
-      if (close) { closeTab(Number(close)); e.stopPropagation(); return; }
+      if (close) {
+        closeTab(Number(close));
+        e.stopPropagation();
+        return;
+      }
       activeTab = Number(el.dataset.id);
       saveTabs();
       renderAll();
@@ -589,9 +658,16 @@ function buildDetail(id: number) {
     const session = t ? currentSession(t) : undefined;
     // A ref is always about the conversation it came up in. A track with no
     // session yet parks them at '' and hands them over when it gets one.
-    window.omi.rpc('tracks.addLink', { id, text: el.value, sessionId: session?.externalId ?? '' })
-      .then(() => { el.value = ''; return refresh(); })
-      .catch((err) => { el.value = ''; el.placeholder = err.message; });
+    window.omi
+      .rpc('tracks.addLink', { id, text: el.value, sessionId: session?.externalId ?? '' })
+      .then(() => {
+        el.value = '';
+        return refresh();
+      })
+      .catch((err) => {
+        el.value = '';
+        el.placeholder = err.message;
+      });
   };
 
   $<HTMLInputElement>('note').onkeydown = (e) => {
@@ -599,8 +675,10 @@ function buildDetail(id: number) {
     const el = e.target as HTMLInputElement;
     const text = el.value.trim();
     if (!text) return;
-    void window.omi.rpc('tracks.addNote', { id, text })
-      .then(() => { el.value = ''; return refresh(); });
+    void window.omi.rpc('tracks.addNote', { id, text }).then(() => {
+      el.value = '';
+      return refresh();
+    });
   };
 
   // NEVER alert()/confirm()/prompt() here: a modal dialog blocks the whole
@@ -623,19 +701,28 @@ function buildDetail(id: number) {
     for (const b of pop.querySelectorAll<HTMLElement>('[data-pin]')) {
       b.onclick = () => {
         const v = b.dataset.pin;
-        void window.omi.rpc('tracks.pin', { id, court: v ? v : null, kind: 'hard' })
-          .then(() => { pop.hidden = true; return refresh(); });
+        void window.omi.rpc('tracks.pin', { id, court: v ? v : null, kind: 'hard' }).then(() => {
+          pop.hidden = true;
+          return refresh();
+        });
       };
     }
     for (const b of pop.querySelectorAll<HTMLElement>('[data-life]')) {
       b.onclick = () => {
-        void window.omi.rpc('tracks.update', { id, patch: { lifecycle: b.dataset.life } })
-          .then(() => { pop.hidden = true; closeTab(id); return refresh(); });
+        void window.omi
+          .rpc('tracks.update', { id, patch: { lifecycle: b.dataset.life } })
+          .then(() => {
+            pop.hidden = true;
+            closeTab(id);
+            return refresh();
+          });
       };
     }
     // Scoped to this popover, and replaced on the next open, so it cannot pile
     // up one listener per poll the way a render-time listener would.
-    const away = () => { pop.hidden = true; };
+    const away = () => {
+      pop.hidden = true;
+    };
     setTimeout(() => document.addEventListener('click', away, { once: true }), 0);
   };
 }
@@ -668,13 +755,15 @@ function patchHead(t: Track) {
     ? `${t.lifecycle} — click to put this back in the open list`
     : 'mark this finished and file it under done';
   finish.onclick = () => {
-    void window.omi.rpc('tracks.update', {
-      id: t.id,
-      patch: { lifecycle: closed ? 'open' : 'done' },
-    }).then(() => {
-      if (!closed) closeTab(t.id);
-      return refreshAll();
-    });
+    void window.omi
+      .rpc('tracks.update', {
+        id: t.id,
+        patch: { lifecycle: closed ? 'open' : 'done' },
+      })
+      .then(() => {
+        if (!closed) closeTab(t.id);
+        return refreshAll();
+      });
   };
 
   const folder = $('folder');
@@ -700,12 +789,15 @@ const ICON_LINK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 function patchSessbar(t: Track, session: Ref | undefined) {
   const m = mounted as NonNullable<typeof mounted>;
   const list = sessionRefsOf(t);
-  const sig = list
-    .map((r) => {
-      const held = t.refs.filter((x) => x.kind !== 'claude_session' && x.sessionId === r.externalId).length;
-      return `${r.externalId}:${r.label}:${r.state ?? liveSession(r)?.state ?? ''}:${held}`;
-    })
-    .join(',') + `|${session?.externalId ?? ''}|${starting === t.id}`;
+  const sig =
+    list
+      .map((r) => {
+        const held = t.refs.filter(
+          (x) => x.kind !== 'claude_session' && x.sessionId === r.externalId,
+        ).length;
+        return `${r.externalId}:${r.label}:${r.state ?? liveSession(r)?.state ?? ''}:${held}`;
+      })
+      .join(',') + `|${session?.externalId ?? ''}|${starting === t.id}`;
   if (m.sig.sess === sig) return;
   m.sig.sess = sig;
 
@@ -714,35 +806,43 @@ function patchSessbar(t: Track, session: Ref | undefined) {
   const scrolled = document.getElementById('sesstabs')?.scrollLeft ?? 0;
   $('sessbar').innerHTML = `
     <div id="sesstabs" class="tabscroll">
-    ${list.map((r) => {
-      const state = r.state ?? liveSession(r)?.state ?? '';
-      // An empty session is disposable; one holding refs is not, because they
-      // live in its scope and would go with it.
-      const holds = t.refs.filter((x) => x.kind !== 'claude_session' && x.sessionId === r.externalId).length;
-      // A session's folder is fixed by Claude when it starts, so one that is not
-      // the track's own folder is worth saying out loud.
-      const cwd = liveSession(r)?.cwd;
-      const where = cwd && cwd !== t.cwd ? `\n${cwd}` : '';
-      // The count of what it holds belongs in the tooltip, not on the chip.
-      const held = holds === 0 ? '' : `\n${holds} ref${holds === 1 ? '' : 's'} linked here`;
-      return `<div class="sess ${session?.externalId === r.externalId ? 'on' : ''}"
+    ${list
+      .map((r) => {
+        const state = r.state ?? liveSession(r)?.state ?? '';
+        // An empty session is disposable; one holding refs is not, because they
+        // live in its scope and would go with it.
+        const holds = t.refs.filter(
+          (x) => x.kind !== 'claude_session' && x.sessionId === r.externalId,
+        ).length;
+        // A session's folder is fixed by Claude when it starts, so one that is not
+        // the track's own folder is worth saying out loud.
+        const cwd = liveSession(r)?.cwd;
+        const where = cwd && cwd !== t.cwd ? `\n${cwd}` : '';
+        // The count of what it holds belongs in the tooltip, not on the chip.
+        const held = holds === 0 ? '' : `\n${holds} ref${holds === 1 ? '' : 's'} linked here`;
+        return `<div class="sess ${session?.externalId === r.externalId ? 'on' : ''}"
                    data-sid="${esc(r.externalId)}"
                    title="${esc((state ? `${state} · ${sessionIdOf(r)}` : sessionIdOf(r)) + where + held)}">
         <span class="dot ${STATE_COURT[state] ?? 'PARKED'}"></span>
         <span class="sname">${esc(r.label ?? shortIdOf(sessionIdOf(r)))}</span>
-        ${holds === 0
-          ? `<span class="x" data-drop="${r.id}" title="remove this session from the track">×</span>`
-          : ''}
+        ${
+          holds === 0
+            ? `<span class="x" data-drop="${r.id}" title="remove this session from the track">×</span>`
+            : ''
+        }
       </div>`;
-    }).join('')}
+      })
+      .join('')}
     </div>
     <button id="sessmore" class="tabmore" hidden title="all sessions in this track">▾</button>
     <div class="sessacts">
-      ${starting === t.id
-        ? `<button class="sadd" id="addsess" disabled aria-busy="true"
+      ${
+        starting === t.id
+          ? `<button class="sadd" id="addsess" disabled aria-busy="true"
                    title="starting a session…" aria-label="starting a session…">${ICON_PLUS}</button>`
-        : `<button class="sadd" id="addsess"
-                   title="open another session in this track" aria-label="open another session in this track">${ICON_PLUS}</button>`}
+          : `<button class="sadd" id="addsess"
+                   title="open another session in this track" aria-label="open another session in this track">${ICON_PLUS}</button>`
+      }
       <button class="sadd" id="attachsess"
               title="attach a session that is already running" aria-label="attach a session that is already running">${ICON_LINK}</button>
       <button id="sidetoggle" class="sidetoggle" title="refs">refs ↔</button>
@@ -755,14 +855,17 @@ function patchSessbar(t: Track, session: Ref | undefined) {
       const drop = (e.target as HTMLElement).dataset.drop;
       if (drop) {
         e.stopPropagation();
-        void window.omi.rpc('tracks.removeRef', { id: t.id, refId: Number(drop) })
+        void window.omi
+          .rpc('tracks.removeRef', { id: t.id, refId: Number(drop) })
           .then(() => {
             // Fall back to whatever session is left.
             delete activeSession[t.id];
             saveTabs();
             return refresh();
           })
-          .catch((err) => { el.title = String(err.message); });
+          .catch((err) => {
+            el.title = String(err.message);
+          });
         return;
       }
       activeSession[t.id] = String(el.dataset.sid);
@@ -847,9 +950,13 @@ function patchSide(t: Track, session: Ref | undefined) {
     el.onclick = () => window.omi.openExternal(el.dataset.url as string);
   }
   for (const el of document.querySelectorAll<HTMLElement>('.rm')) {
-    el.onclick = () => void window.omi.rpc('tracks.removeRef', { id: t.id, refId: Number(el.dataset.ref) })
-      .then(refresh)
-      .catch((err) => { el.title = String(err.message); });
+    el.onclick = () =>
+      void window.omi
+        .rpc('tracks.removeRef', { id: t.id, refId: Number(el.dataset.ref) })
+        .then(refresh)
+        .catch((err) => {
+          el.title = String(err.message);
+        });
   }
 }
 
@@ -880,7 +987,9 @@ function mountTerminal(t: Track, session: Ref | undefined) {
   // The job's own short id, which is what `claude attach` takes.
   const shortId = session && attachable ? (liveSession(session)?.shortId as string) : null;
   const viewId = shortId ? `claude:${shortId}` : null;
-  const key = viewId ?? `none:${session?.externalId ?? ''}:${liveSession(session ?? { externalId: '' })?.kind ?? ''}`;
+  const key =
+    viewId ??
+    `none:${session?.externalId ?? ''}:${liveSession(session ?? { externalId: '' })?.kind ?? ''}`;
   if (m.viewId === key) return;
   m.viewId = key;
 
@@ -916,21 +1025,26 @@ function mountTerminal(t: Track, session: Ref | undefined) {
     // A stopped session is not a dead end. Resuming keeps its id, so the refs it
     // holds stay put; starting over is the fallback when the transcript is gone,
     // and it takes those refs along instead of leaving them on a corpse.
-    const holds = t.refs.filter((x) => x.kind !== 'claude_session' && x.sessionId === session.externalId).length;
+    const holds = t.refs.filter(
+      (x) => x.kind !== 'claude_session' && x.sessionId === session.externalId,
+    ).length;
     wrap.innerHTML = `<div class="empty">
       <b>${esc(session.label ?? '')}</b> is no longer running.<br><br>
       Its transcript is kept, so it can pick up where it left off.
       <div class="deadacts">
         <button class="wbtn go" id="resumesess">resume</button>
-        ${holds > 0
-          ? `<button class="wbtn" id="freshsess"
+        ${
+          holds > 0
+            ? `<button class="wbtn" id="freshsess"
                      title="for when it cannot be resumed">new session, keep ${holds} ref${holds === 1 ? '' : 's'}</button>`
-          : ''}
+            : ''
+        }
       </div>
       <div class="deaderr muted" id="deaderr"></div>
       </div>`;
     const busy = (b: HTMLButtonElement, label: string) => {
-      for (const x of wrap.querySelectorAll<HTMLButtonElement>('.deadacts button')) x.disabled = true;
+      for (const x of wrap.querySelectorAll<HTMLButtonElement>('.deadacts button'))
+        x.disabled = true;
       b.textContent = label;
     };
     const fail = (err: unknown) => {
@@ -944,24 +1058,34 @@ function mountTerminal(t: Track, session: Ref | undefined) {
     $<HTMLButtonElement>('resumesess').onclick = async (e) => {
       busy(e.currentTarget as HTMLButtonElement, 'resuming…');
       try {
-        const r = await window.omi.rpc('tracks.resumeSession', { id: t.id, session: session.externalId });
+        const r = await window.omi.rpc('tracks.resumeSession', {
+          id: t.id,
+          session: session.externalId,
+        });
         if (r?.session?.sessionId) activeSession[t.id] = `claude:${r.session.sessionId}`;
         saveTabs();
         await refresh();
         focusTerminal();
-      } catch (err) { fail(err); }
+      } catch (err) {
+        fail(err);
+      }
     };
     const fresh = document.getElementById('freshsess') as HTMLButtonElement | null;
     if (fresh) {
       fresh.onclick = async () => {
         busy(fresh, 'starting…');
         try {
-          const r = await window.omi.rpc('tracks.startSession', { id: t.id, carryFrom: session.externalId });
+          const r = await window.omi.rpc('tracks.startSession', {
+            id: t.id,
+            carryFrom: session.externalId,
+          });
           if (r?.session?.sessionId) activeSession[t.id] = `claude:${r.session.sessionId}`;
           saveTabs();
           await refresh();
           focusTerminal();
-        } catch (err) { fail(err); }
+        } catch (err) {
+          fail(err);
+        }
       };
     }
     return;
@@ -984,9 +1108,14 @@ function patchTimeline(t: Track) {
     const el = document.getElementById('timeline');
     const m = mounted;
     if (!el || !m || m.trackId !== t.id) return;
-    const html = rows.map((r) => `
+    const html =
+      rows
+        .map(
+          (r) => `
       <div class="ev"><span class="evt">${ago(r.occurred_at)}</span>
-      <span class="evb">${esc(r.body ?? r.title)}</span></div>`).join('') || '<div class="muted pad">no notes yet</div>';
+      <span class="evb">${esc(r.body ?? r.title)}</span></div>`,
+        )
+        .join('') || '<div class="muted pad">no notes yet</div>';
     if (m.sig.time === html) return;
     m.sig.time = html;
     el.innerHTML = html;
@@ -1081,8 +1210,13 @@ async function pickFolder(anchor: HTMLElement, startIn?: string | null): Promise
       if (!host.contains(e.target as Node)) closePicker(null);
     };
     picker = {
-      resolve, cache: new Map([['~/', root.dirs]]), matches: [], sel: -1, seq: 0,
-      away, restore: document.activeElement,
+      resolve,
+      cache: new Map([['~/', root.dirs]]),
+      matches: [],
+      sel: -1,
+      seq: 0,
+      away,
+      restore: document.activeElement,
     };
     host.innerHTML = `
       <div class="fptop">
@@ -1156,9 +1290,14 @@ function renderPickerList(none = '') {
   const p = picker;
   if (!p) return;
   const list = $('fplist');
-  list.innerHTML = p.matches.slice(0, PICKER_ROWS).map((d, i) => `
-    <div class="fprow ${i === p.sel ? 'on' : ''}" data-i="${i}">${esc(d)}<span class="muted">/</span></div>`)
-    .join('') || (none ? `<div class="fpnone">${none}</div>` : '');
+  list.innerHTML =
+    p.matches
+      .slice(0, PICKER_ROWS)
+      .map(
+        (d, i) => `
+    <div class="fprow ${i === p.sel ? 'on' : ''}" data-i="${i}">${esc(d)}<span class="muted">/</span></div>`,
+      )
+      .join('') || (none ? `<div class="fpnone">${none}</div>` : '');
   for (const el of list.querySelectorAll<HTMLElement>('.fprow')) {
     // Keep the caret in the input: the list is only ever a shortcut for typing.
     el.onmousedown = (e) => e.preventDefault();
@@ -1185,7 +1324,10 @@ async function choose() {
   const typed = p.sel >= 0 ? splitPath(value)[0] + p.matches[p.sel] : value;
   const r = await window.omi.listDir(typed || '~');
   if (picker !== p) return;
-  if (!r) { setPickerHint(`${typed} is not a folder`); return; }
+  if (!r) {
+    setPickerHint(`${typed} is not a folder`);
+    return;
+  }
   closePicker(r.path);
 }
 
@@ -1229,7 +1371,14 @@ function openWizard() {
   const recent = [...new Set(tracks.map((t) => t.cwd).filter((c): c is string => !!c))];
   attachSheet = null;
   archiveSheet = null;
-  wizard = { title: '', cwd: recent[0] ?? null, picked: new Set(), fresh: false, busy: null, focused: false };
+  wizard = {
+    title: '',
+    cwd: recent[0] ?? null,
+    picked: new Set(),
+    fresh: false,
+    busy: null,
+    focused: false,
+  };
   renderWizard();
 }
 
@@ -1240,9 +1389,7 @@ function renderWizard() {
   host.hidden = false;
 
   const recent = [...new Set(tracks.map((t) => t.cwd).filter((c): c is string => !!c))].slice(0, 6);
-  const here = w.cwd
-    ? sessions.filter((s) => s.cwd === w.cwd)
-    : [];
+  const here = w.cwd ? sessions.filter((s) => s.cwd === w.cwd) : [];
 
   host.innerHTML = `
     <form class="sheet" id="wiz">
@@ -1256,23 +1403,33 @@ function renderWizard() {
         <button type="button" id="wpick" class="wbtn">${w.cwd ? 'change…' : 'choose a folder…'}</button>
         <span class="wpath">${w.cwd ? esc(w.cwd) : '<span class="muted">none yet</span>'}</span>
       </div>
-      ${recent.length > 0 ? `<div class="wrecent">${recent.map((c) => `
-        <button type="button" class="chip ${c === w.cwd ? 'on' : ''}" data-cwd="${esc(c)}">${esc(c.split('/').pop() ?? c)}</button>`).join('')}</div>` : ''}
+      ${
+        recent.length > 0
+          ? `<div class="wrecent">${recent
+              .map(
+                (c) => `
+        <button type="button" class="chip ${c === w.cwd ? 'on' : ''}" data-cwd="${esc(c)}">${esc(c.split('/').pop() ?? c)}</button>`,
+              )
+              .join('')}</div>`
+          : ''
+      }
 
       <label class="wlab">sessions in this folder</label>
       <div class="wsess">
         ${!w.cwd ? '<div class="muted pad">choose a folder first</div>' : ''}
         ${w.cwd && here.length === 0 ? '<div class="muted pad">none running here yet</div>' : ''}
-        ${here.map((s) => {
-          const bg = s.kind === 'background';
-          return `<label class="wopt ${bg ? '' : 'off'}">
+        ${here
+          .map((s) => {
+            const bg = s.kind === 'background';
+            return `<label class="wopt ${bg ? '' : 'off'}">
             <input type="checkbox" data-sess="${esc(s.sessionId)}" ${bg ? '' : 'disabled'}
                    ${w.picked.has(s.sessionId) ? 'checked' : ''} />
             <span class="dot ${STATE_COURT[s.state] ?? 'PARKED'}"></span>
             <span class="wname">${esc(s.name ?? s.shortId)}</span>
             <span class="sstate">${esc(s.state)}${bg ? '' : ' · interactive, cannot attach'}</span>
           </label>`;
-        }).join('')}
+          })
+          .join('')}
         <label class="wopt">
           <input type="checkbox" id="wfresh" ${w.fresh ? 'checked' : ''} ${w.cwd ? '' : 'disabled'} />
           <span class="dot ON_CLAUDE"></span>
@@ -1294,7 +1451,10 @@ function renderWizard() {
    * taken once, for the same reason.
    */
   const title = document.getElementById('wtitle') as HTMLInputElement | null;
-  if (title) title.oninput = () => { if (wizard) wizard.title = title.value; };
+  if (title)
+    title.oninput = () => {
+      if (wizard) wizard.title = title.value;
+    };
   if (!w.busy && !w.focused) {
     w.focused = true;
     $('wtitle').focus();
@@ -1324,13 +1484,17 @@ function renderWizard() {
     };
   }
   const fresh = document.getElementById('wfresh') as HTMLInputElement | null;
-  if (fresh) fresh.onchange = () => {
-    if (!wizard) return;
-    wizard.fresh = fresh.checked;
-    renderWizard();
-  };
+  if (fresh)
+    fresh.onchange = () => {
+      if (!wizard) return;
+      wizard.fresh = fresh.checked;
+      renderWizard();
+    };
   $('wcancel').onclick = () => closeModal();
-  $<HTMLFormElement>('wiz').onsubmit = (e) => { e.preventDefault(); void createFromWizard(); };
+  $<HTMLFormElement>('wiz').onsubmit = (e) => {
+    e.preventDefault();
+    void createFromWizard();
+  };
 }
 
 async function createFromWizard() {
@@ -1355,7 +1519,10 @@ async function createFromWizard() {
     await window.omi.rpc('tracks.attachSession', { id: track.id, sessionId }).catch(() => {});
   }
   if (w.fresh) {
-    if (wizard) { wizard.busy = 'opening a session…'; renderWizard(); }
+    if (wizard) {
+      wizard.busy = 'opening a session…';
+      renderWizard();
+    }
     try {
       const r = await window.omi.rpc('tracks.startSession', { id: track.id });
       if (r?.session?.sessionId) activeSession[track.id] = `claude:${r.session.sessionId}`;
@@ -1383,7 +1550,8 @@ async function createFromWizard() {
  * hovering over the terminal. Sessions are filtered to the track's folder,
  * because a session from somewhere else is almost never the one you meant.
  */
-let attachSheet: { trackId: number; picked: Set<string>; all: boolean; busy: boolean } | null = null;
+let attachSheet: { trackId: number; picked: Set<string>; all: boolean; busy: boolean } | null =
+  null;
 
 function openAttachSheet(trackId: number) {
   archiveSheet = null;
@@ -1395,9 +1563,16 @@ function renderAttachSheet() {
   const a = attachSheet;
   if (!a) return;
   const t = tracks.find((x) => x.id === a.trackId);
-  if (!t) { closeModal(); return; }
+  if (!t) {
+    closeModal();
+    return;
+  }
 
-  const linked = new Set(sessionRefsOf(t).map((r) => liveSession(r)).filter(Boolean));
+  const linked = new Set(
+    sessionRefsOf(t)
+      .map((r) => liveSession(r))
+      .filter(Boolean),
+  );
   const inFolder = sessions.filter((s) => !t.cwd || a.all || s.cwd === t.cwd);
   const free = inFolder.filter((s) => !linked.has(s));
   const hiddenByFolder = sessions.length - inFolder.length;
@@ -1409,20 +1584,24 @@ function renderAttachSheet() {
       <div class="wpath">${t.cwd ? esc(t.cwd) : '<span class="muted">this track has no folder — showing everything</span>'}</div>
       <div class="wsess">
         ${free.length === 0 ? '<div class="muted pad">nothing left to attach here</div>' : ''}
-        ${free.map((s) => {
-          const bg = s.kind === 'background';
-          return `<label class="wopt ${bg ? '' : 'off'}">
+        ${free
+          .map((s) => {
+            const bg = s.kind === 'background';
+            return `<label class="wopt ${bg ? '' : 'off'}">
             <input type="checkbox" data-sess="${esc(s.sessionId)}" ${bg ? '' : 'disabled'}
                    ${a.picked.has(s.sessionId) ? 'checked' : ''} />
             <span class="dot ${STATE_COURT[s.state] ?? 'PARKED'}"></span>
             <span class="wname">${esc(s.name ?? s.shortId)}</span>
             <span class="sstate">${esc(s.state)}${bg ? '' : ' · interactive, cannot attach'}</span>
           </label>`;
-        }).join('')}
+          })
+          .join('')}
       </div>
-      ${hiddenByFolder > 0 && !a.all
-        ? `<button type="button" id="aall" class="wlink">show ${hiddenByFolder} session(s) from other folders</button>`
-        : ''}
+      ${
+        hiddenByFolder > 0 && !a.all
+          ? `<button type="button" id="aall" class="wlink">show ${hiddenByFolder} session(s) from other folders</button>`
+          : ''
+      }
       <div class="wacts">
         <button type="button" id="acancel" class="wbtn">cancel</button>
         <button type="submit" class="wbtn go" ${a.busy ? 'disabled' : ''}>attach</button>
@@ -1438,7 +1617,13 @@ function renderAttachSheet() {
     };
   }
   const all = document.getElementById('aall');
-  if (all) all.onclick = () => { if (attachSheet) { attachSheet.all = true; renderModal(); } };
+  if (all)
+    all.onclick = () => {
+      if (attachSheet) {
+        attachSheet.all = true;
+        renderModal();
+      }
+    };
   $('acancel').onclick = () => closeModal();
   $<HTMLFormElement>('att').onsubmit = async (e) => {
     e.preventDefault();
@@ -1469,7 +1654,8 @@ function openArchiveSheet() {
   attachSheet = null;
   archiveSheet = { query: '', rows: null, error: null };
   renderModal();
-  void window.omi.rpc('tracks.archived')
+  void window.omi
+    .rpc('tracks.archived')
     .then((rows: Track[]) => {
       archivedTracks = rows;
       if (!archiveSheet) return;
@@ -1493,7 +1679,10 @@ function renderArchiveSheet() {
   if (!a) return;
   const host = $('modal');
   host.hidden = false;
-  if (document.getElementById('arch')) { patchArchiveList(); return; }
+  if (document.getElementById('arch')) {
+    patchArchiveList();
+    return;
+  }
 
   host.innerHTML = `
     <div class="sheet" id="arch" role="dialog" aria-label="archived tracks">
@@ -1522,7 +1711,9 @@ const archiveRow = (t: Track) => {
     t.cwd ? shortPath(t.cwd) : 'no folder',
     t.lifecycle,
     t.archivedAt ? `archived ${ago(t.archivedAt)} ago` : '',
-  ].filter(Boolean).join(' · ');
+  ]
+    .filter(Boolean)
+    .join(' · ');
   return `<div class="arow">
     <div class="amain">
       <div class="wname" title="${esc(t.question ?? t.title)}">${esc(t.title)}</div>
@@ -1538,21 +1729,25 @@ function patchArchiveList() {
   const list = document.getElementById('alist');
   if (!a || !list) return;
   const q = a.query.trim().toLowerCase();
-  const rows = (a.rows ?? []).filter((t) =>
-    !q || [t.title, t.question, t.cwd].some((s) => !!s && s.toLowerCase().includes(q)));
+  const rows = (a.rows ?? []).filter(
+    (t) => !q || [t.title, t.question, t.cwd].some((s) => !!s && s.toLowerCase().includes(q)),
+  );
 
-  list.innerHTML = a.rows === null
-    ? '<div class="muted pad">loading…</div>'
-    : a.error
-      ? `<div class="muted pad">could not load the archive: ${esc(a.error)}</div>`
-      : a.rows.length === 0
-        ? '<div class="muted pad">no archived tracks</div>'
-        : rows.length === 0
-          ? `<div class="muted pad">no archived track matches “${esc(a.query.trim())}”</div>`
-          : rows.map(archiveRow).join('');
+  list.innerHTML =
+    a.rows === null
+      ? '<div class="muted pad">loading…</div>'
+      : a.error
+        ? `<div class="muted pad">could not load the archive: ${esc(a.error)}</div>`
+        : a.rows.length === 0
+          ? '<div class="muted pad">no archived tracks</div>'
+          : rows.length === 0
+            ? `<div class="muted pad">no archived track matches “${esc(a.query.trim())}”</div>`
+            : rows.map(archiveRow).join('');
 
   for (const b of list.querySelectorAll<HTMLButtonElement>('[data-restore]')) {
-    b.onclick = () => { void restoreArchived(Number(b.dataset.restore), b); };
+    b.onclick = () => {
+      void restoreArchived(Number(b.dataset.restore), b);
+    };
   }
 }
 
@@ -1599,14 +1794,19 @@ async function openPty(shortId: string, viewId: string, cwd: string | null) {
   const t = termFor(viewId);
   try {
     const info = await window.omi.rpc('pty.open', {
-      shortId, cols: t.term.cols, rows: t.term.rows, cwd,
+      shortId,
+      cols: t.term.cols,
+      rows: t.term.rows,
+      cwd,
     });
     t.epoch = info.epoch;
     t.expect = -1n; // accept whatever offset the replay starts at
     // The hub hands back an EXISTING view when one is already open, and that one
     // still carries the size of whoever opened it first. Re-assert ours.
     fitTerm(t);
-    void window.omi.rpc('pty.resize', { viewId, cols: t.term.cols, rows: t.term.rows }).catch(() => {});
+    void window.omi
+      .rpc('pty.resize', { viewId, cols: t.term.cols, rows: t.term.rows })
+      .catch(() => {});
   } catch (err) {
     openedPtys.delete(viewId);
     t.term.writeln(`\r\n\x1b[31mcould not attach: ${String((err as Error).message)}\x1b[0m`);
@@ -1627,7 +1827,11 @@ function closeTab(id: number) {
   renderAll();
 }
 
-function renderAll() { renderRail(); renderTabs(); renderDetail(); }
+function renderAll() {
+  renderRail();
+  renderTabs();
+  renderDetail();
+}
 
 /** Both halves of the binary: the open list, and the done section if it is up. */
 async function refreshAll() {
@@ -1655,26 +1859,44 @@ async function boot() {
 
   $('new').onclick = () => openWizard();
   // The tab list closes on any click outside it, like any menu would.
-  window.addEventListener('mousedown', (e) => {
-    const t = e.target as HTMLElement;
-    // The ▾ toggles the menu itself on click; closing it here first would
-    // make that click open it again.
-    if (!$('tabmenu').contains(t) && !t.closest('.tabmore')) closeTabMenu();
-  }, true);
+  window.addEventListener(
+    'mousedown',
+    (e) => {
+      const t = e.target as HTMLElement;
+      // The ▾ toggles the menu itself on click; closing it here first would
+      // make that click open it again.
+      if (!$('tabmenu').contains(t) && !t.closest('.tabmore')) closeTabMenu();
+    },
+    true,
+  );
   window.addEventListener('blur', closeTabMenu);
   window.addEventListener('resize', closeTabMenu);
-  window.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
-    // Innermost first: the picker can sit on top of the new-track sheet.
-    if (picker) { e.stopPropagation(); closePicker(null); return; }
-    if (!$('tabmenu').hidden) { closeTabMenu(); return; }
-    if (wizard || attachSheet || archiveSheet) { closeModal(); return; }
-    const side = document.getElementById('side');
-    if (side?.classList.contains('open')) {
-      side.classList.remove('open');
-      focusTerminal();
-    }
-  }, true);
+  window.addEventListener(
+    'keydown',
+    (e) => {
+      if (e.key !== 'Escape') return;
+      // Innermost first: the picker can sit on top of the new-track sheet.
+      if (picker) {
+        e.stopPropagation();
+        closePicker(null);
+        return;
+      }
+      if (!$('tabmenu').hidden) {
+        closeTabMenu();
+        return;
+      }
+      if (wizard || attachSheet || archiveSheet) {
+        closeModal();
+        return;
+      }
+      const side = document.getElementById('side');
+      if (side?.classList.contains('open')) {
+        side.classList.remove('open');
+        focusTerminal();
+      }
+    },
+    true,
+  );
 
   // Load tracks BEFORE restoring tabs: the restore filters against them.
   await refresh();

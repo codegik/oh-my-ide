@@ -1,6 +1,6 @@
-import Database from 'better-sqlite3';
-import { effective } from '@omi/core';
 import type { Court, RefKind, TrackRef, TrackSnapshot } from '@omi/core';
+import { effective } from '@omi/core';
+import Database from 'better-sqlite3';
 import { MIGRATIONS } from './schema.js';
 
 export * from './schema.js';
@@ -30,8 +30,7 @@ export interface TrackRow {
   refs: TrackRef[];
 }
 
-const ulid = (): string =>
-  Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+const ulid = (): string => Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 
 export class Db {
   private readonly db: Database.Database;
@@ -137,7 +136,9 @@ export class Db {
   listArchived(): TrackRow[] {
     return (
       this.db
-        .prepare('SELECT * FROM track WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC')
+        .prepare(
+          'SELECT * FROM track WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC',
+        )
         .all() as Record<string, unknown>[]
     ).map((r) => this.hydrate(r));
   }
@@ -160,7 +161,9 @@ export class Db {
     }
     const now = Date.now();
     this.db
-      .prepare('UPDATE track SET archived_at = COALESCE(archived_at, ?), updated_at = ? WHERE id = ?')
+      .prepare(
+        'UPDATE track SET archived_at = COALESCE(archived_at, ?), updated_at = ? WHERE id = ?',
+      )
       .run(now, now, id);
     return this.getTrack(id) as TrackRow;
   }
@@ -278,9 +281,19 @@ export class Db {
            url=excluded.url, label=excluded.label, state=excluded.state, updated_at=excluded.updated_at`,
       )
       .run(
-        o.trackId, o.sessionId ?? '', o.kind, o.externalId, o.url ?? null, o.label ?? null,
-        o.role ?? 'support', o.state ?? null, o.body ?? null,
-        o.autoLinked ? 1 : 0, o.linkRule ?? null, now, now,
+        o.trackId,
+        o.sessionId ?? '',
+        o.kind,
+        o.externalId,
+        o.url ?? null,
+        o.label ?? null,
+        o.role ?? 'support',
+        o.state ?? null,
+        o.body ?? null,
+        o.autoLinked ? 1 : 0,
+        o.linkRule ?? null,
+        now,
+        now,
       );
     this.addEvent({
       trackId: o.trackId,
@@ -424,7 +437,13 @@ export class Db {
       )
       .run(
         o.dedupeKey ?? `${o.source}:${o.kind}:${at}:${Math.random().toString(36).slice(2, 8)}`,
-        o.trackId, o.source, o.kind, at, o.title, o.body ?? null, o.importance ?? 0,
+        o.trackId,
+        o.source,
+        o.kind,
+        at,
+        o.title,
+        o.body ?? null,
+        o.importance ?? 0,
       );
   }
 
@@ -498,8 +517,13 @@ export class Db {
                           court_source = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
-        e.court, e.derivation.weight, e.derivation.rule, e.derivation.reason,
-        e.source, Date.now(), id,
+        e.court,
+        e.derivation.weight,
+        e.derivation.rule,
+        e.derivation.reason,
+        e.source,
+        Date.now(),
+        id,
       );
   }
 
@@ -513,7 +537,9 @@ export class Db {
 
   pin(trackId: number, court: Court, kind: 'hard' | 'snooze' | 'park', expiresAt?: number): void {
     this.db
-      .prepare('UPDATE status_pin SET released_at = ?, release_reason = ? WHERE track_id = ? AND released_at IS NULL')
+      .prepare(
+        'UPDATE status_pin SET released_at = ?, release_reason = ? WHERE track_id = ? AND released_at IS NULL',
+      )
       .run(Date.now(), 'replaced', trackId);
     this.db
       .prepare(
@@ -528,7 +554,9 @@ export class Db {
 
   unpin(trackId: number): void {
     this.db
-      .prepare('UPDATE status_pin SET released_at = ?, release_reason = ? WHERE track_id = ? AND released_at IS NULL')
+      .prepare(
+        'UPDATE status_pin SET released_at = ?, release_reason = ? WHERE track_id = ? AND released_at IS NULL',
+      )
       .run(Date.now(), 'manual', trackId);
     this.recomputeCourt(trackId);
   }
@@ -537,8 +565,9 @@ export class Db {
 
   private refsOf(trackId: number): TrackRef[] {
     return (
-      this.db.prepare('SELECT * FROM track_ref WHERE track_id = ? ORDER BY id').all(trackId) as
-        Record<string, unknown>[]
+      this.db
+        .prepare('SELECT * FROM track_ref WHERE track_id = ? ORDER BY id')
+        .all(trackId) as Record<string, unknown>[]
     ).map((r) => ({
       id: r.id as number,
       kind: r.kind as RefKind,

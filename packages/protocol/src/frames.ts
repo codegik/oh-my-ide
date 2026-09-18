@@ -47,19 +47,18 @@ export function encodeControl(msg: unknown): Buffer {
   return withHeader(FRAME_CONTROL, Buffer.from(JSON.stringify(msg), 'utf8'));
 }
 
-export function encodePtyOut(
-  viewId: string,
-  epoch: number,
-  offset: bigint,
-  bytes: Buffer,
-): Buffer {
+export function encodePtyOut(viewId: string, epoch: number, offset: bigint, bytes: Buffer): Buffer {
   const id = Buffer.from(viewId, 'utf8');
   const body = Buffer.allocUnsafe(2 + id.length + 4 + 8 + bytes.length);
   let p = 0;
-  body.writeUInt16BE(id.length, p); p += 2;
-  id.copy(body, p); p += id.length;
-  body.writeUInt32BE(epoch, p); p += 4;
-  body.writeBigUInt64BE(offset, p); p += 8;
+  body.writeUInt16BE(id.length, p);
+  p += 2;
+  id.copy(body, p);
+  p += id.length;
+  body.writeUInt32BE(epoch, p);
+  p += 4;
+  body.writeBigUInt64BE(offset, p);
+  p += 8;
   bytes.copy(body, p);
   return withHeader(FRAME_PTY_OUT, body);
 }
@@ -112,8 +111,10 @@ function decodeBody(typ: number, body: Buffer): Frame | null {
     const idLen = body.readUInt16BE(0);
     const viewId = body.subarray(2, 2 + idLen).toString('utf8');
     let p = 2 + idLen;
-    const epoch = body.readUInt32BE(p); p += 4;
-    const offset = body.readBigUInt64BE(p); p += 8;
+    const epoch = body.readUInt32BE(p);
+    p += 4;
+    const offset = body.readBigUInt64BE(p);
+    p += 8;
     return { typ: FRAME_PTY_OUT, viewId, epoch, offset, bytes: Buffer.from(body.subarray(p)) };
   }
   if (typ === FRAME_PTY_IN) {

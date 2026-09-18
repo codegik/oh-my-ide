@@ -28,8 +28,12 @@ live('live CLI contract', () => {
       expect(['background', 'interactive']).toContain(s.kind);
       expect(s.cwd.startsWith('/')).toBe(true);
       expect(s.state).not.toBe(undefined);
-      // The short id must always agree with the session uuid.
-      expect(s.sessionId.replace(/-/g, '').startsWith(s.shortId)).toBe(true);
+      // An interactive row has no job id, so its short id comes from the uuid.
+      // A background job keeps the one it launched with, even after its
+      // conversation moves to a new uuid (see isSameSession).
+      if (s.kind === 'interactive') {
+        expect(s.sessionId.replace(/-/g, '').startsWith(s.shortId)).toBe(true);
+      }
     }
   }, 20_000);
 });

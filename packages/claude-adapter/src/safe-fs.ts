@@ -18,7 +18,10 @@ const ALLOW = [
 ];
 
 export class DeniedPathError extends Error {
-  constructor(readonly target: string, reason: string) {
+  constructor(
+    readonly target: string,
+    reason: string,
+  ) {
     super(`refusing to read ${target}: ${reason}`);
     this.name = 'DeniedPathError';
   }
@@ -35,9 +38,7 @@ export function assertReadable(abs: string): void {
   if (DENY_BASENAME.some((r) => r.test(base))) {
     throw new DeniedPathError(abs, 'credential-like filename');
   }
-  const ok = ALLOW.some(
-    (a) => rel.startsWith(`${a.dir}${path.sep}`) && a.ext.test(resolved),
-  );
+  const ok = ALLOW.some((a) => rel.startsWith(`${a.dir}${path.sep}`) && a.ext.test(resolved));
   if (!ok) throw new DeniedPathError(abs, 'not an allowed artifact');
 }
 

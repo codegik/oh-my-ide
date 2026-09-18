@@ -61,7 +61,9 @@ export function shortIdOf(sessionId: string): string {
  * it was launched with — so it is the key that survives.
  */
 export function isSameSession(s: NormalizedSession, sessionId: string): boolean {
-  return s.sessionId === sessionId || (s.kind === 'background' && s.shortId === shortIdOf(sessionId));
+  return (
+    s.sessionId === sessionId || (s.kind === 'background' && s.shortId === shortIdOf(sessionId))
+  );
 }
 
 export function normalizeRow(row: AgentRow): NormalizedSession {

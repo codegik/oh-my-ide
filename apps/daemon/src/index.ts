@@ -2,16 +2,16 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { ClaudeBgRunner, isSameSession, probe, shortIdOf } from '@omi/claude-adapter';
 import type { ClaudeCompat, NormalizedSession } from '@omi/claude-adapter';
+import { ClaudeBgRunner, isSameSession, probe, shortIdOf } from '@omi/claude-adapter';
 import { parseRef } from '@omi/core';
 import { Db } from '@omi/db';
 import {
+  encodeControl,
   FRAME_CONTROL,
   FRAME_PTY_IN,
   FrameDecoder,
   PROTOCOL_VERSION,
-  encodeControl,
   runtimeDir,
   socketPath,
 } from '@omi/protocol';
@@ -56,17 +56,29 @@ let compatPromise: Promise<ClaudeCompat> | null = null;
 function getCompat(): Promise<ClaudeCompat> {
   if (compat) return Promise.resolve(compat);
   compatPromise ??= probe()
-    .then((c) => ((compat = c), c))
+    .then((c) => {
+      compat = c;
+      return c;
+    })
     .catch((err) => {
       compatPromise = null;
       return {
         cliVersion: 'unknown',
         tier: 'degraded' as const,
         features: {
-          background: false, attach: false, logs: false, stop: false, respawn: false,
-          agentsJson: false, forkSession: false, sessionId: false, name: false,
+          background: false,
+          attach: false,
+          logs: false,
+          stop: false,
+          respawn: false,
+          agentsJson: false,
+          forkSession: false,
+          sessionId: false,
+          name: false,
         },
-        notes: [`Could not probe the Claude CLI: ${err instanceof Error ? err.message : String(err)}`],
+        notes: [
+          `Could not probe the Claude CLI: ${err instanceof Error ? err.message : String(err)}`,
+        ],
       };
     });
   return compatPromise;
@@ -385,7 +397,7 @@ function handleConnection(sock: net.Socket): void {
     let frames: ReturnType<FrameDecoder['push']>;
     try {
       frames = decoder.push(chunk);
-    } catch (err) {
+    } catch {
       // A corrupt stream cannot be resynchronized; drop the client rather than
       // guessing at frame boundaries.
       sock.destroy();
@@ -424,27 +436,43 @@ async function dispatch(sock: net.Socket, msg: Record<string, unknown>): Promise
   const method = String(msg.method ?? '');
   const handler = methods[method];
   if (!handler) {
-    sock.write(encodeControl({
-      t: 'error', id, ok: false, code: 'unknown_method',
-      message: `no such method: ${method}`, retryable: false,
-    }));
+    sock.write(
+      encodeControl({
+        t: 'error',
+        id,
+        ok: false,
+        code: 'unknown_method',
+        message: `no such method: ${method}`,
+        retryable: false,
+      }),
+    );
     return;
   }
   try {
     const data = await handler((msg.params ?? {}) as any, sock);
     sock.write(encodeControl({ t: 'result', id, ok: true, data }));
   } catch (err) {
-    sock.write(encodeControl({
-      t: 'error', id, ok: false, code: 'handler_failed',
-      message: err instanceof Error ? err.message : String(err), retryable: true,
-    }));
+    sock.write(
+      encodeControl({
+        t: 'error',
+        id,
+        ok: false,
+        code: 'handler_failed',
+        message: err instanceof Error ? err.message : String(err),
+        retryable: true,
+      }),
+    );
   }
 }
 
 async function isDaemonAlive(sock: string): Promise<boolean> {
   return new Promise((resolve) => {
-    const s = net.connect(sock)
-      .on('connect', () => { s.destroy(); resolve(true); })
+    const s = net
+      .connect(sock)
+      .on('connect', () => {
+        s.destroy();
+        resolve(true);
+      })
       .on('error', () => resolve(false));
   });
 }
@@ -460,7 +488,11 @@ async function main(): Promise<void> {
     process.stdout.write('[omid] a daemon is already listening; exiting\n');
     process.exit(0);
   }
-  try { fs.unlinkSync(sock); } catch { /* nothing stale to remove */ }
+  try {
+    fs.unlinkSync(sock);
+  } catch {
+    /* nothing stale to remove */
+  }
 
   const server = net.createServer(handleConnection);
   server.on('error', (err: NodeJS.ErrnoException) => {
@@ -485,7 +517,11 @@ async function main(): Promise<void> {
 
   const shutdown = () => {
     server.close();
-    try { fs.unlinkSync(sock); } catch { /* already gone */ }
+    try {
+      fs.unlinkSync(sock);
+    } catch {
+      /* already gone */
+    }
     process.exit(0);
   };
   process.on('SIGINT', shutdown);

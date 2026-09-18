@@ -1,6 +1,6 @@
 import type net from 'node:net';
-import * as pty from 'node-pty';
 import { encodeControl, encodePtyOut } from '@omi/protocol';
+import * as pty from 'node-pty';
 
 /** Per-view scrollback kept in memory for instant re-attach. */
 const RING_CAP = 2 * 1024 * 1024;
@@ -30,13 +30,20 @@ export class TitleScanner {
     for (const ch of chunk) {
       if (this.buf === null) {
         // Waiting for the "ESC ] 0 ;" / "ESC ] 2 ;" opener.
-        if (this.sawEsc && ch === ']') { this.buf = ''; this.sawEsc = false; continue; }
+        if (this.sawEsc && ch === ']') {
+          this.buf = '';
+          this.sawEsc = false;
+          continue;
+        }
         this.sawEsc = ch === '\x1b';
         continue;
       }
       if (this.buf === '' && (ch === '0' || ch === '2')) continue; // the ps digit
-      if (this.buf === '' && ch === ';') continue;                // and its separator
-      if (ch === '\x07') { done = this.finish() ?? done; continue; }
+      if (this.buf === '' && ch === ';') continue; // and its separator
+      if (ch === '\x07') {
+        done = this.finish() ?? done;
+        continue;
+      }
       if (this.sawEsc) {
         // ESC \\ terminates; any other escape means this was never a title.
         done = ch === '\\' ? (this.finish() ?? done) : done;
@@ -44,8 +51,14 @@ export class TitleScanner {
         this.sawEsc = false;
         continue;
       }
-      if (ch === '\x1b') { this.sawEsc = true; continue; }
-      if (this.buf.length >= TitleScanner.MAX) { this.abandon(); continue; }
+      if (ch === '\x1b') {
+        this.sawEsc = true;
+        continue;
+      }
+      if (this.buf.length >= TitleScanner.MAX) {
+        this.abandon();
+        continue;
+      }
       this.buf += ch;
     }
     return done;

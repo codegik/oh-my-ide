@@ -16,7 +16,9 @@ export function parseRef(input: string): ParsedRef | null {
   const text = input.trim();
   if (!text) return null;
 
-  const gh = /^https?:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/(pull|issues)\/(\d+)/i.exec(text);
+  const gh = /^https?:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/(pull|issues)\/(\d+)/i.exec(
+    text,
+  );
   if (gh) {
     const [, owner, repo, type, num] = gh;
     const isPr = type?.toLowerCase() === 'pull';
@@ -71,7 +73,10 @@ export function parseRef(input: string): ParsedRef | null {
 }
 
 /** A PR's head branch is the join key to a Claude session's branch. */
-export function prMatchesBranch(prHeadBranch: string | null, sessionBranch: string | null): boolean {
+export function prMatchesBranch(
+  prHeadBranch: string | null,
+  sessionBranch: string | null,
+): boolean {
   return (
     prHeadBranch !== null &&
     sessionBranch !== null &&

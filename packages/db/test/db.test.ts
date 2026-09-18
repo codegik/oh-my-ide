@@ -27,7 +27,12 @@ describe('Db', () => {
   it('recomputes court when a ref changes state', () => {
     const db = fresh();
     const t = db.createTrack({ title: 'x' });
-    db.addRef({ trackId: t.id, kind: 'claude_session', externalId: 'claude:abc', state: 'WORKING' });
+    db.addRef({
+      trackId: t.id,
+      kind: 'claude_session',
+      externalId: 'claude:abc',
+      state: 'WORKING',
+    });
     expect(db.getTrack(t.id)?.court).toBe('ON_CLAUDE');
 
     db.setRefState('claude_session', 'claude:abc', 'NEEDS_PERMISSION');
@@ -87,7 +92,13 @@ describe('Db', () => {
     const db = fresh();
     const t = db.createTrack({ title: 'x' });
     const before = db.getTrack(t.id)?.lastActivityAt ?? 0;
-    db.addEvent({ trackId: t.id, source: 'claude', kind: 'x', title: 'y', occurredAt: before + 5000 });
+    db.addEvent({
+      trackId: t.id,
+      source: 'claude',
+      kind: 'x',
+      title: 'y',
+      occurredAt: before + 5000,
+    });
     expect(db.getTrack(t.id)?.lastActivityAt).toBe(before + 5000);
     db.close();
   });
@@ -98,14 +109,20 @@ describe('Db', () => {
     db.addEvent({ trackId: t.id, source: 'user', kind: 'note', title: 'first', occurredAt: 1 });
     // More system events than the limit, all newer than the note.
     for (let i = 0; i < 5; i++) {
-      db.addEvent({ trackId: t.id, source: 'claude', kind: 'session.named', title: `e${i}`, occurredAt: 10 + i });
+      db.addEvent({
+        trackId: t.id,
+        source: 'claude',
+        kind: 'session.named',
+        title: `e${i}`,
+        occurredAt: 10 + i,
+      });
     }
     db.addEvent({ trackId: t.id, source: 'user', kind: 'note', title: 'second', occurredAt: 100 });
     expect(db.notes(t.id, 3).map((e) => e.title)).toEqual(['second', 'first']);
     db.close();
   });
 
-  it('moves a stopped session\'s refs to a new session, leaving ones it already holds', () => {
+  it("moves a stopped session's refs to a new session, leaving ones it already holds", () => {
     const db = fresh();
     const t = db.createTrack({ title: 'x' });
     db.addRef({ trackId: t.id, kind: 'claude_session', externalId: 'claude:old' });
@@ -115,7 +132,11 @@ describe('Db', () => {
     db.addRef({ trackId: t.id, sessionId: 'claude:new', kind: 'jira_issue', externalId: 'PAY-1' });
     db.moveSessionRefs(t.id, 'claude:old', 'claude:new');
     const held = (s: string) =>
-      db.getTrack(t.id)?.refs.filter((r) => r.sessionId === s).map((r) => r.externalId).sort();
+      db
+        .getTrack(t.id)
+        ?.refs.filter((r) => r.sessionId === s)
+        .map((r) => r.externalId)
+        .sort();
     expect(held('claude:new')).toEqual(['PAY-1', 'a/b#1']);
     // The duplicate stays behind rather than failing the whole move.
     expect(held('claude:old')).toEqual(['PAY-1']);
@@ -125,7 +146,12 @@ describe('Db', () => {
   it('re-points a resumed session to its new id, keeping its label and refs', () => {
     const db = fresh();
     const t = db.createTrack({ title: 'x' });
-    db.addRef({ trackId: t.id, kind: 'claude_session', externalId: 'claude:old', label: 'Security issues' });
+    db.addRef({
+      trackId: t.id,
+      kind: 'claude_session',
+      externalId: 'claude:old',
+      label: 'Security issues',
+    });
     db.addRef({ trackId: t.id, sessionId: 'claude:old', kind: 'github_pr', externalId: 'a/b#1' });
     db.repointSession(t.id, 'claude:old', 'claude:new');
     const refs = db.getTrack(t.id)?.refs ?? [];
@@ -138,8 +164,20 @@ describe('Db', () => {
   it('scopes refs to a session, so two sessions can hold the same PR', () => {
     const db = fresh();
     const t = db.createTrack({ title: 'x' });
-    db.addRef({ trackId: t.id, sessionId: 'claude:a', kind: 'github_pr', externalId: 'a/b#1', state: 'AWAITING_REVIEW' });
-    db.addRef({ trackId: t.id, sessionId: 'claude:b', kind: 'github_pr', externalId: 'a/b#1', state: 'CHECKS_FAILED' });
+    db.addRef({
+      trackId: t.id,
+      sessionId: 'claude:a',
+      kind: 'github_pr',
+      externalId: 'a/b#1',
+      state: 'AWAITING_REVIEW',
+    });
+    db.addRef({
+      trackId: t.id,
+      sessionId: 'claude:b',
+      kind: 'github_pr',
+      externalId: 'a/b#1',
+      state: 'CHECKS_FAILED',
+    });
     db.addRef({ trackId: t.id, kind: 'jira_issue', externalId: 'PAY-1' });
 
     const refs = db.getTrack(t.id)?.refs ?? [];
@@ -154,8 +192,20 @@ describe('Db', () => {
   it('re-adding the same ref in the same scope updates rather than duplicates', () => {
     const db = fresh();
     const t = db.createTrack({ title: 'x' });
-    db.addRef({ trackId: t.id, sessionId: 'claude:a', kind: 'github_pr', externalId: 'a/b#1', label: 'first' });
-    db.addRef({ trackId: t.id, sessionId: 'claude:a', kind: 'github_pr', externalId: 'a/b#1', label: 'second' });
+    db.addRef({
+      trackId: t.id,
+      sessionId: 'claude:a',
+      kind: 'github_pr',
+      externalId: 'a/b#1',
+      label: 'first',
+    });
+    db.addRef({
+      trackId: t.id,
+      sessionId: 'claude:a',
+      kind: 'github_pr',
+      externalId: 'a/b#1',
+      label: 'second',
+    });
     const refs = db.getTrack(t.id)?.refs ?? [];
     expect(refs).toHaveLength(1);
     expect(refs[0]?.label).toBe('second');
@@ -165,7 +215,12 @@ describe('Db', () => {
   it('refuses to unlink a session that still holds refs', () => {
     const db = fresh();
     const t = db.createTrack({ title: 'x' });
-    db.addRef({ trackId: t.id, kind: 'claude_session', externalId: 'claude:abc', state: 'WORKING' });
+    db.addRef({
+      trackId: t.id,
+      kind: 'claude_session',
+      externalId: 'claude:abc',
+      state: 'WORKING',
+    });
     db.addRef({ trackId: t.id, sessionId: 'claude:abc', kind: 'github_pr', externalId: 'a/b#1' });
     const session = (db.getTrack(t.id)?.refs ?? []).find((r) => r.kind === 'claude_session');
 
@@ -178,7 +233,12 @@ describe('Db', () => {
     const db = fresh();
     const t = db.createTrack({ title: 'x' });
     db.addRef({ trackId: t.id, kind: 'claude_session', externalId: 'claude:empty', state: 'IDLE' });
-    db.addRef({ trackId: t.id, kind: 'claude_session', externalId: 'claude:busy', state: 'WORKING' });
+    db.addRef({
+      trackId: t.id,
+      kind: 'claude_session',
+      externalId: 'claude:busy',
+      state: 'WORKING',
+    });
     db.addRef({ trackId: t.id, sessionId: 'claude:busy', kind: 'github_pr', externalId: 'a/b#1' });
     const refs = db.getTrack(t.id)?.refs ?? [];
     const empty = refs.find((r) => r.externalId === 'claude:empty');
@@ -206,8 +266,9 @@ describe('Db', () => {
     expect(ref?.trackId).toBe(t.id);
 
     db.setRefLabel(ref?.id as number, 'why payments time out');
-    expect(db.getTrack(t.id)?.refs.find((r) => r.kind === 'claude_session')?.label)
-      .toBe('why payments time out');
+    expect(db.getTrack(t.id)?.refs.find((r) => r.kind === 'claude_session')?.label).toBe(
+      'why payments time out',
+    );
     db.close();
   });
 
@@ -219,18 +280,24 @@ describe('Db', () => {
     raw.exec(MIGRATION_0001);
     raw.pragma('user_version = 1');
     const now = Date.now();
-    raw.prepare(
-      `INSERT INTO track (id, public_id, title, last_activity_at, created_at, updated_at)
+    raw
+      .prepare(
+        `INSERT INTO track (id, public_id, title, last_activity_at, created_at, updated_at)
        VALUES (1, 'p1', 'payment timeouts', ?, ?, ?)`,
-    ).run(now, now, now);
-    raw.prepare(
-      `INSERT INTO track_ref (id, track_id, kind, external_id, label, created_at, updated_at)
+      )
+      .run(now, now, now);
+    raw
+      .prepare(
+        `INSERT INTO track_ref (id, track_id, kind, external_id, label, created_at, updated_at)
        VALUES (7, 1, 'github_pr', 'api#8821', 'api#8821', ?, ?)`,
-    ).run(now, now);
-    raw.prepare(
-      `INSERT INTO event (dedupe_key, track_id, ref_id, source, kind, occurred_at, title)
+      )
+      .run(now, now);
+    raw
+      .prepare(
+        `INSERT INTO event (dedupe_key, track_id, ref_id, source, kind, occurred_at, title)
        VALUES ('k1', 1, 7, 'user', 'ref.added.github_pr', ?, 'linked api#8821')`,
-    ).run(now);
+      )
+      .run(now);
     raw.close();
 
     const db = new Db(file);
@@ -249,18 +316,27 @@ describe('Db', () => {
     db.addRef({ trackId: t.id, kind: 'github_pr', externalId: 'a/b#1' });
     db.addRef({ trackId: t.id, kind: 'jira_issue', externalId: 'PAY-1' });
 
-    db.addRef({ trackId: t.id, kind: 'claude_session', externalId: 'claude:aaa', state: 'WORKING' });
+    db.addRef({
+      trackId: t.id,
+      kind: 'claude_session',
+      externalId: 'claude:aaa',
+      state: 'WORKING',
+    });
     db.adoptOrphanRefs(t.id, 'claude:aaa');
 
     const refs = db.getTrack(t.id)?.refs ?? [];
-    expect(refs.filter((r) => r.kind !== 'claude_session').every((r) => r.sessionId === 'claude:aaa')).toBe(true);
+    expect(
+      refs.filter((r) => r.kind !== 'claude_session').every((r) => r.sessionId === 'claude:aaa'),
+    ).toBe(true);
     // The session itself stays the track's, not its own child.
     expect(refs.find((r) => r.kind === 'claude_session')?.sessionId).toBe('');
 
     // A second session gets nothing: there is nothing unscoped left to adopt.
     db.addRef({ trackId: t.id, kind: 'claude_session', externalId: 'claude:bbb', state: 'IDLE' });
     db.adoptOrphanRefs(t.id, 'claude:bbb');
-    expect((db.getTrack(t.id)?.refs ?? []).filter((r) => r.sessionId === 'claude:bbb')).toHaveLength(0);
+    expect(
+      (db.getTrack(t.id)?.refs ?? []).filter((r) => r.sessionId === 'claude:bbb'),
+    ).toHaveLength(0);
     db.close();
   });
 
@@ -268,7 +344,13 @@ describe('Db', () => {
     const db = fresh();
     const t = db.createTrack({ title: 'x' });
     db.addRef({ trackId: t.id, kind: 'github_pr', externalId: 'a/b#1', label: 'unscoped' });
-    db.addRef({ trackId: t.id, sessionId: 'claude:aaa', kind: 'github_pr', externalId: 'a/b#1', label: 'scoped' });
+    db.addRef({
+      trackId: t.id,
+      sessionId: 'claude:aaa',
+      kind: 'github_pr',
+      externalId: 'a/b#1',
+      label: 'scoped',
+    });
     db.adoptOrphanRefs(t.id, 'claude:aaa');
 
     const prs = (db.getTrack(t.id)?.refs ?? []).filter((r) => r.kind === 'github_pr');
@@ -319,7 +401,12 @@ describe('Db', () => {
     const b = db.createTrack({ title: 'b' });
     db.updateTrack(a.id, { lifecycle: 'done' });
     db.updateTrack(b.id, { lifecycle: 'dropped' });
-    expect(db.listClosed().map((r) => r.id).sort()).toEqual([a.id, b.id].sort());
+    expect(
+      db
+        .listClosed()
+        .map((r) => r.id)
+        .sort(),
+    ).toEqual([a.id, b.id].sort());
 
     const archived = db.archiveTrack(a.id);
     expect(archived.archivedAt).not.toBeNull();
@@ -387,11 +474,13 @@ describe('Db', () => {
     for (const m of MIGRATIONS.filter((x) => x.version <= 3)) raw.exec(m.sql);
     raw.pragma('user_version = 3');
     const now = Date.now();
-    raw.prepare(
-      `INSERT INTO track (id, public_id, title, lifecycle, court, closed_at, closed_reason,
+    raw
+      .prepare(
+        `INSERT INTO track (id, public_id, title, lifecycle, court, closed_at, closed_reason,
                           last_activity_at, created_at, updated_at)
        VALUES (1, 'p1', 'finished work', 'done', 'DONE', ?, 'done', ?, ?, ?)`,
-    ).run(now, now, now, now);
+      )
+      .run(now, now, now, now);
     raw.close();
 
     const db = new Db(file);

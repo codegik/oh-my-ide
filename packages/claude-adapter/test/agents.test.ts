@@ -94,7 +94,11 @@ describe('isSameSession', () => {
   });
 
   it('matches an interactive session only by its uuid', () => {
-    const inter = normalizeRow({ sessionId: 'aaaaaaaa-0000-0000-0000-000000000000', cwd: '/x', kind: 'interactive' });
+    const inter = normalizeRow({
+      sessionId: 'aaaaaaaa-0000-0000-0000-000000000000',
+      cwd: '/x',
+      kind: 'interactive',
+    });
     expect(isSameSession(inter, 'aaaaaaaa-0000-0000-0000-000000000000')).toBe(true);
   });
 });
