@@ -1,3 +1,9 @@
 packages:
   - 'packages/*'
   - 'apps/*'
+
+onlyBuiltDependencies:
+  - node-pty
+  - better-sqlite3
+  - electron
+  - esbuild

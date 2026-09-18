@@ -42,7 +42,7 @@ doctor() {
     if have "$c"; then printf '  %-8s %s\n' "$c" "$($c --version 2>&1 | head -1)"
     else printf '  %-8s MISSING\n' "$c"; ok=1; fi
   done
-  if [ -x node_modules/electron/dist/electron ]; then
+  if [ -x node_modules/.bin/electron ]; then
     printf '  %-8s %s\n' electron "$(node_modules/.bin/electron --version 2>/dev/null || echo present)"
   else
     printf '  %-8s MISSING — run: ./start.sh build\n' electron; ok=1
@@ -54,7 +54,7 @@ doctor() {
 # pnpm may skip electron's own postinstall (which downloads the ~230MB binary),
 # so a fresh clone can install cleanly and still have no electron to run.
 ensure_electron() {
-  [ -x node_modules/electron/dist/electron ] && return 0
+  [ -x node_modules/.bin/electron ] && return 0
   [ -f node_modules/electron/install.js ] || { echo "electron is not installed; run: pnpm install" >&2; return 1; }
   echo "==> downloading the electron binary (first run only)"
   ( cd node_modules/electron && node install.js )
@@ -75,7 +75,7 @@ case "${1:-run}" in
   daemon)
     [ -f "$DAEMON_ENTRY" ] || build
     ensure_electron || exit 1
-    exec env ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/electron "$DAEMON_ENTRY"
+    exec env ELECTRON_RUN_AS_NODE=1 node_modules/.bin/electron "$DAEMON_ENTRY"
     ;;
   status)
     if daemon_alive; then echo "daemon: listening at $SOCKET"; else echo "daemon: not running"; fi
@@ -137,7 +137,7 @@ case "${1:-run}" in
     fi
     ensure_electron || exit 1
     echo "==> starting oh-my-ide (the daemon keeps running after you close the window)"
-    exec node_modules/electron/dist/electron apps/desktop
+    exec node_modules/.bin/electron apps/desktop
     ;;
   *) usage; exit 1 ;;
 esac
