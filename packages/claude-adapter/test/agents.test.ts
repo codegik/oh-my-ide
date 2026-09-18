@@ -1,6 +1,14 @@
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { isSameSession, normalizeRow, parseAgentList, shortIdOf } from '../src/agents.js';
+import {
+  dropStaleInteractiveSessions,
+  isPidAlive,
+  isSameSession,
+  normalizeRow,
+  parseAgentList,
+  shortIdOf,
+} from '../src/agents.js';
 
 const fixture = readFileSync(
   new URL('../../../tools/fixtures/agents-2.1.272.json', import.meta.url),
@@ -100,5 +108,46 @@ describe('isSameSession', () => {
       kind: 'interactive',
     });
     expect(isSameSession(inter, 'aaaaaaaa-0000-0000-0000-000000000000')).toBe(true);
+  });
+});
+
+describe('isPidAlive', () => {
+  it('is true for this test process', () => {
+    expect(isPidAlive(process.pid)).toBe(true);
+  });
+
+  it('is false for a pid that has already exited', () => {
+    const { pid } = spawnSync('true');
+    expect(isPidAlive(pid as number)).toBe(false);
+  });
+});
+
+describe('dropStaleInteractiveSessions', () => {
+  it('drops an interactive row whose terminal has already closed', () => {
+    const { pid: dead } = spawnSync('true');
+    const sessions = [
+      normalizeRow({ sessionId: 'aaaaaaaa-0000-0000-0000-000000000000', cwd: '/x', kind: 'interactive', pid: dead }),
+    ];
+    expect(dropStaleInteractiveSessions(sessions)).toEqual([]);
+  });
+
+  it('keeps an interactive row whose terminal is still open', () => {
+    const sessions = [
+      normalizeRow({
+        sessionId: 'aaaaaaaa-0000-0000-0000-000000000000',
+        cwd: '/x',
+        kind: 'interactive',
+        pid: process.pid,
+      }),
+    ];
+    expect(dropStaleInteractiveSessions(sessions)).toHaveLength(1);
+  });
+
+  it('never checks a background row, whose lifecycle the CLI already tracks', () => {
+    const { pid: dead } = spawnSync('true');
+    const sessions = [
+      normalizeRow({ sessionId: 'aaaaaaaa-0000-0000-0000-000000000000', cwd: '/x', kind: 'background', pid: dead }),
+    ];
+    expect(dropStaleInteractiveSessions(sessions)).toHaveLength(1);
   });
 });

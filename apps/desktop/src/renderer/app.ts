@@ -637,7 +637,18 @@ function buildDetail(id: number) {
    */
   $('folder').onclick = async () => {
     const t = trackById(id);
-    if (!t || (t.cwd && sessionRefsOf(t).length > 0)) return;
+    if (!t) return;
+    if (t.cwd && sessionRefsOf(t).length > 0) {
+      await navigator.clipboard.writeText(t.cwd);
+      $('folder').textContent = 'copied';
+      setTimeout(() => {
+        const btn = $('folder');
+        if (!btn.isConnected || btn.textContent !== 'copied') return;
+        const cur = trackById(id);
+        btn.textContent = cur?.cwd ? shortPath(cur.cwd) : 'choose a folder…';
+      }, 900);
+      return;
+    }
     const dir = await pickFolder($('folder'), t.cwd);
     if (!dir) return;
     await window.omi.rpc('tracks.update', { id, patch: { cwd: dir } });
@@ -771,7 +782,7 @@ function patchHead(t: Track) {
   folder.className = fixed ? 'folder fixed' : 'folder';
   folder.title = t.cwd
     ? fixed
-      ? `${t.cwd} — fixed: this track's sessions run here`
+      ? `${t.cwd} — click to copy`
       : `${t.cwd} — click to change`
     : 'no folder set — click to choose one';
   folder.textContent = t.cwd ? shortPath(t.cwd) : 'choose a folder…';
@@ -1364,8 +1375,38 @@ interface Wizard {
   busy: string | null;
   /** Focus belongs to the user once they have started typing. */
   focused: boolean;
+  /** Sessions that ran in `cwd` before but aren't live now — fetched on demand. */
+  past: any[];
+  pastLoading: boolean;
 }
 let wizard: Wizard | null = null;
+
+/**
+ * Past sessions live on disk, not in the polled `sessions` list, so they are
+ * fetched on demand for one folder at a time — never from the event-driven
+ * `refresh()` path, the same way `pickFolder` already does on-demand `listDir`
+ * calls instead of pre-loading the whole filesystem.
+ */
+async function fetchPast(cwd: string | null): Promise<any[]> {
+  if (!cwd) return [];
+  return window.omi.rpc('sessions.past', { cwd }).catch(() => []);
+}
+
+function setWizardCwd(cwd: string | null) {
+  const w = wizard;
+  if (!w) return;
+  w.cwd = cwd;
+  w.picked.clear();
+  w.past = [];
+  w.pastLoading = !!cwd;
+  renderWizard();
+  void fetchPast(cwd).then((rows) => {
+    if (!wizard || wizard.cwd !== cwd) return; // folder changed again meanwhile
+    wizard.past = rows;
+    wizard.pastLoading = false;
+    renderWizard();
+  });
+}
 
 function openWizard() {
   const recent = [...new Set(tracks.map((t) => t.cwd).filter((c): c is string => !!c))];
@@ -1373,13 +1414,15 @@ function openWizard() {
   archiveSheet = null;
   wizard = {
     title: '',
-    cwd: recent[0] ?? null,
+    cwd: null,
     picked: new Set(),
     fresh: false,
     busy: null,
     focused: false,
+    past: [],
+    pastLoading: false,
   };
-  renderWizard();
+  setWizardCwd(recent[0] ?? null);
 }
 
 function renderWizard() {
@@ -1430,6 +1473,19 @@ function renderWizard() {
           </label>`;
           })
           .join('')}
+        ${w.pastLoading ? '<div class="muted pad">looking for past sessions…</div>' : ''}
+        ${w.past.length > 0 ? '<div class="wsub">past sessions here</div>' : ''}
+        ${w.past
+          .map(
+            (s) => `
+          <label class="wopt past">
+            <input type="checkbox" data-sess="${esc(s.sessionId)}" ${w.picked.has(s.sessionId) ? 'checked' : ''} />
+            <span class="dot PARKED"></span>
+            <span class="wname">${esc(s.preview ?? s.shortId)}</span>
+            <span class="sstate">${s.gitBranch ? `${esc(s.gitBranch)} · ` : ''}last active ${ago(s.lastActivityAt)} ago</span>
+          </label>`,
+          )
+          .join('')}
         <label class="wopt">
           <input type="checkbox" id="wfresh" ${w.fresh ? 'checked' : ''} ${w.cwd ? '' : 'disabled'} />
           <span class="dot ON_CLAUDE"></span>
@@ -1462,18 +1518,11 @@ function renderWizard() {
 
   $('wpick').onclick = async () => {
     const dir = await pickFolder($('wpick'), w.cwd);
-    if (!dir || !wizard) return;
-    wizard.cwd = dir;
-    wizard.picked.clear();
-    renderWizard();
+    if (!dir) return;
+    setWizardCwd(dir);
   };
   for (const c of document.querySelectorAll<HTMLElement>('.chip')) {
-    c.onclick = () => {
-      if (!wizard) return;
-      wizard.cwd = String(c.dataset.cwd);
-      wizard.picked.clear();
-      renderWizard();
-    };
+    c.onclick = () => setWizardCwd(String(c.dataset.cwd));
   }
   for (const b of document.querySelectorAll<HTMLInputElement>('[data-sess]')) {
     b.onchange = () => {
@@ -1550,13 +1599,26 @@ async function createFromWizard() {
  * hovering over the terminal. Sessions are filtered to the track's folder,
  * because a session from somewhere else is almost never the one you meant.
  */
-let attachSheet: { trackId: number; picked: Set<string>; all: boolean; busy: boolean } | null =
-  null;
+let attachSheet: {
+  trackId: number;
+  picked: Set<string>;
+  all: boolean;
+  busy: boolean;
+  past: any[];
+  pastLoading: boolean;
+} | null = null;
 
 function openAttachSheet(trackId: number) {
   archiveSheet = null;
-  attachSheet = { trackId, picked: new Set(), all: false, busy: false };
+  attachSheet = { trackId, picked: new Set(), all: false, busy: false, past: [], pastLoading: true };
   renderModal();
+  const cwd = tracks.find((x) => x.id === trackId)?.cwd ?? null;
+  void fetchPast(cwd).then((rows) => {
+    if (!attachSheet || attachSheet.trackId !== trackId) return;
+    attachSheet.past = rows;
+    attachSheet.pastLoading = false;
+    renderModal();
+  });
 }
 
 function renderAttachSheet() {
@@ -1573,9 +1635,14 @@ function renderAttachSheet() {
       .map((r) => liveSession(r))
       .filter(Boolean),
   );
+  const linkedIds = new Set(sessionRefsOf(t).map(sessionIdOf));
   const inFolder = sessions.filter((s) => !t.cwd || a.all || s.cwd === t.cwd);
   const free = inFolder.filter((s) => !linked.has(s));
   const hiddenByFolder = sessions.length - inFolder.length;
+  // Scoped to the track's own folder only — the "other folders" toggle below
+  // stays live-only; browsing past sessions across arbitrary folders is a much
+  // bigger feature than "attach one that ran here before".
+  const freePast = a.past.filter((p) => !linkedIds.has(p.sessionId));
 
   $('modal').hidden = false;
   $('modal').innerHTML = `
@@ -1583,7 +1650,7 @@ function renderAttachSheet() {
       <div class="whead">ATTACH A SESSION</div>
       <div class="wpath">${t.cwd ? esc(t.cwd) : '<span class="muted">this track has no folder — showing everything</span>'}</div>
       <div class="wsess">
-        ${free.length === 0 ? '<div class="muted pad">nothing left to attach here</div>' : ''}
+        ${free.length === 0 && freePast.length === 0 ? '<div class="muted pad">nothing left to attach here</div>' : ''}
         ${free
           .map((s) => {
             const bg = s.kind === 'background';
@@ -1595,6 +1662,19 @@ function renderAttachSheet() {
             <span class="sstate">${esc(s.state)}${bg ? '' : ' · interactive, cannot attach'}</span>
           </label>`;
           })
+          .join('')}
+        ${a.pastLoading ? '<div class="muted pad">looking for past sessions…</div>' : ''}
+        ${freePast.length > 0 ? '<div class="wsub">past sessions here</div>' : ''}
+        ${freePast
+          .map(
+            (s) => `
+          <label class="wopt past">
+            <input type="checkbox" data-sess="${esc(s.sessionId)}" ${a.picked.has(s.sessionId) ? 'checked' : ''} />
+            <span class="dot PARKED"></span>
+            <span class="wname">${esc(s.preview ?? s.shortId)}</span>
+            <span class="sstate">${s.gitBranch ? `${esc(s.gitBranch)} · ` : ''}last active ${ago(s.lastActivityAt)} ago</span>
+          </label>`,
+          )
           .join('')}
       </div>
       ${

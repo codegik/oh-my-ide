@@ -1,4 +1,5 @@
 export * from './agents.js';
+export * from './history.js';
 export * from './capabilities.js';
 export { ClaudeCliError, runClaude } from './cli.js';
 export * from './runner.js';

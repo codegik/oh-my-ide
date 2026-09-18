@@ -1,4 +1,4 @@
-import { parseAgentList, shortIdOf } from './agents.js';
+import { dropStaleInteractiveSessions, parseAgentList, shortIdOf } from './agents.js';
 import { runClaude } from './cli.js';
 import type { NormalizedSession, SessionRunner, StartedSession } from './types.js';
 
@@ -86,7 +86,7 @@ export class ClaudeBgRunner implements SessionRunner {
 
   async list(): Promise<NormalizedSession[]> {
     const stdout = await runClaude(['agents', '--json'], { timeoutMs: 15_000 });
-    return parseAgentList(stdout).sessions;
+    return dropStaleInteractiveSessions(parseAgentList(stdout).sessions);
   }
 
   async logs(s: { shortId: string }): Promise<string> {

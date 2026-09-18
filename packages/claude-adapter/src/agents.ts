@@ -66,6 +66,29 @@ export function isSameSession(s: NormalizedSession, sessionId: string): boolean 
   );
 }
 
+/**
+ * Background jobs have a supervisor that keeps `state` honest even after the
+ * process exits (`stopped`, `done`, ...). An interactive row has no such
+ * supervisor — it is a snapshot of a terminal that may since have closed, and
+ * `claude agents --json` keeps reporting it regardless. A dead pid is the only
+ * signal we get that the row is stale; without checking it, a session that has
+ * already ended looks identical to one still open in someone's terminal, and
+ * the app refuses to offer the resume it would otherwise offer a dead session.
+ */
+export function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+/** Drops interactive rows whose pid is gone, as if the CLI had not reported them. */
+export function dropStaleInteractiveSessions(sessions: NormalizedSession[]): NormalizedSession[] {
+  return sessions.filter((s) => s.kind !== 'interactive' || s.pid === null || isPidAlive(s.pid));
+}
+
 export function normalizeRow(row: AgentRow): NormalizedSession {
   const kind = row.kind === 'background' ? 'background' : 'interactive';
   const raw = (kind === 'background' ? row.state : row.status) ?? null;

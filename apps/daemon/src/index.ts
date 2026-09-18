@@ -3,7 +3,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import type { ClaudeCompat, NormalizedSession } from '@omi/claude-adapter';
-import { ClaudeBgRunner, isSameSession, probe, shortIdOf } from '@omi/claude-adapter';
+import { ClaudeBgRunner, isSameSession, pastSessionsFor, probe, shortIdOf } from '@omi/claude-adapter';
 import { parseRef } from '@omi/core';
 import { Db } from '@omi/db';
 import {
@@ -158,6 +158,22 @@ const methods: Record<string, Handler> = {
 
   'sessions.list': async () => (await syncSessions()).sort((a, b) => b.startedAt - a.startedAt),
 
+  /**
+   * On-demand, per-cwd only — called when the wizard's or attach-sheet's
+   * folder changes, never from the poll/sessions.list path. Scanning
+   * transcripts on every refresh would be exactly the "second, worse copy of
+   * the supervisor" this file's other comments warn against.
+   */
+  'sessions.past': async (p) => {
+    const cwd = String(p.cwd ?? '').trim();
+    if (!cwd) throw new Error('a folder is required to look up past sessions');
+    const liveHere = (await runner.list()).filter((s) => s.cwd === cwd);
+    return pastSessionsFor(cwd)
+      .filter((h) => !liveHere.some((s) => isSameSession(s, h.sessionId)))
+      .slice(0, 20);
+  },
+
+
   /** Starts a background session in a folder, idle unless a prompt is given. */
   'sessions.create': async (p) => {
     const cwd = String(p.cwd ?? '').trim();
@@ -245,24 +261,48 @@ const methods: Record<string, Handler> = {
   },
 
   'tracks.attachSession': async (p) => {
-    const sessions = await runner.list();
-    const s = sessions.find((x) => x.sessionId === p.sessionId || x.shortId === p.sessionId);
-    if (!s) throw new Error('no such session');
+    const track = db.getTrack(Number(p.id));
+    if (!track) throw new Error('no such track');
+
+    const live = await runner.list();
+    const found = live.find((x) => x.sessionId === p.sessionId || x.shortId === p.sessionId);
+
+    let sessionId: string;
+    let shortId: string;
+    let cwd: string | null;
+    let name: string | null;
+    let state: string | null;
+    if (found) {
+      ({ sessionId, shortId, cwd, name, state } = found);
+    } else {
+      // Not currently running. Only resume it if a transcript for this
+      // track's own folder actually claims that id — a cheap, local,
+      // read-only check before any id reaches `claude --bg --resume`.
+      const cwdForResume = track.cwd ?? undefined;
+      const known = cwdForResume && pastSessionsFor(cwdForResume).some((h) => h.sessionId === p.sessionId);
+      if (!known) throw new Error('no such session');
+      const started = await runner.resume({ sessionId: String(p.sessionId), cwd: cwdForResume });
+      sessionId = started.sessionId;
+      shortId = started.shortId;
+      cwd = started.cwd;
+      name = started.name;
+      state = 'STARTING';
+    }
+
     // A track with no folder of its own takes the one the session is already
     // running in — the user picked the session, so they picked the folder with
     // it, and asking them again would only offer a chance to get it wrong.
-    const track = db.getTrack(Number(p.id));
-    if (track && !track.cwd && s.cwd) db.updateTrack(track.id, { cwd: s.cwd });
+    if (!track.cwd && cwd) db.updateTrack(track.id, { cwd });
     db.addRef({
       trackId: Number(p.id),
       kind: 'claude_session',
-      externalId: `claude:${s.sessionId}`,
-      label: s.name ?? s.shortId,
-      state: s.state,
+      externalId: `claude:${sessionId}`,
+      label: name ?? shortId,
+      state,
       role: 'implementation',
       linkRule: 'manual',
     });
-    db.adoptOrphanRefs(Number(p.id), `claude:${s.sessionId}`);
+    db.adoptOrphanRefs(Number(p.id), `claude:${sessionId}`);
     broadcast({ t: 'changed', entity: 'track', ids: [Number(p.id)] });
     return db.getTrack(Number(p.id));
   },
