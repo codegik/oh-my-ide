@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron';
+import { BrowserWindow, app, ipcMain, shell } from 'electron';
 import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import {
   FRAME_CONTROL,
@@ -218,6 +219,41 @@ function tryConnect(p: string): Promise<net.Socket> {
 }
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Backs the folder picker, which is a text box with completion rather than a
+ * native dialog. A track's folder decides which sessions it can even see, so a
+ * typo there is a track pointed at nothing — which is why this answers null for
+ * anything that is not a directory, and the picker refuses to choose it.
+ *
+ * Only directory names come back, never files: that is all the picker needs,
+ * and all the renderer gets to learn about the disk.
+ */
+const LIST_LIMIT = 2000;
+
+async function listDir(raw: string): Promise<{ home: string; path: string; dirs: string[] } | null> {
+  if (typeof raw !== 'string') return null;
+  const home = os.homedir();
+  const expanded = raw === '~' || raw.startsWith('~/') ? home + raw.slice(1) : raw;
+  const abs = path.resolve(home, expanded);
+  let entries: fs.Dirent[];
+  try {
+    entries = await fs.promises.readdir(abs, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const dirs: string[] = [];
+  for (const d of entries) {
+    if (dirs.length >= LIST_LIMIT) break;
+    if (d.isDirectory()) dirs.push(d.name);
+    else if (d.isSymbolicLink()) {
+      const st = await fs.promises.stat(path.join(abs, d.name)).catch(() => null);
+      if (st?.isDirectory()) dirs.push(d.name);
+    }
+  }
+  dirs.sort((a, b) => a.localeCompare(b));
+  return { home, path: abs, dirs };
+}
+
 const client = new DaemonClient();
 
 function createWindow(): void {
@@ -243,24 +279,7 @@ app.whenReady().then(async () => {
   );
   ipcMain.handle('omi:welcome', guard(() => client.whenWelcome()));
   ipcMain.handle('omi:openExternal', guard((_e, url: string) => shell.openExternal(url)));
-  /**
-   * A native folder picker, not a text field: a track's folder decides which
-   * sessions it can even see, and a typo there is a track pointed at nothing.
-   * The dialog is modal to the window, which is safe — unlike a JS dialog in the
-   * renderer, it does not block the terminals.
-   */
-  ipcMain.handle('omi:pickFolder', guard(async (e, startIn?: string) => {
-    const win = BrowserWindow.fromWebContents(e.sender);
-    const opts = {
-      title: 'choose a folder',
-      properties: ['openDirectory' as const, 'createDirectory' as const],
-      ...(startIn ? { defaultPath: startIn } : {}),
-    };
-    const r = win
-      ? await dialog.showOpenDialog(win, opts)
-      : await dialog.showOpenDialog(opts);
-    return r.canceled ? null : (r.filePaths[0] ?? null);
-  }));
+  ipcMain.handle('omi:listDir', guard((_e, raw: string) => listDir(raw)));
   ipcMain.on('omi:ptyInput', (e, viewId: string, bytes: Uint8Array) => {
     if (fromApp(e)) client.ptyInput(viewId, bytes);
   });

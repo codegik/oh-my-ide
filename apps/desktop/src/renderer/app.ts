@@ -13,7 +13,7 @@ declare global {
       rpc(method: string, params?: unknown): Promise<any>;
       welcome(): Promise<any>;
       openExternal(url: string): Promise<void>;
-      pickFolder(startIn?: string): Promise<string | null>;
+      listDir(raw: string): Promise<{ home: string; path: string; dirs: string[] } | null>;
       ptyInput(viewId: string, bytes: Uint8Array): void;
       onPty(cb: (viewId: string, epoch: number, offset: string, bytes: Uint8Array) => void): void;
       onEvent(cb: (msg: any) => void): void;
@@ -412,7 +412,7 @@ function buildDetail(id: number) {
   $('folder').onclick = async () => {
     const t = trackById(id);
     if (!t || (t.cwd && sessionRefsOf(t).length > 0)) return;
-    const dir = await window.omi.pickFolder(t.cwd ?? undefined);
+    const dir = await pickFolder($('folder'), t.cwd);
     if (!dir) return;
     await window.omi.rpc('tracks.update', { id, patch: { cwd: dir } });
     await refresh();
@@ -607,7 +607,7 @@ function patchSessbar(t: Track, session: Ref | undefined) {
     // one and carry on — a button that silently does nothing is worse than a
     // button that asks a question.
     if (!cur?.cwd) {
-      const dir = await window.omi.pickFolder();
+      const dir = await pickFolder($('addsess'));
       if (!dir) return;
       await window.omi.rpc('tracks.update', { id: t.id, patch: { cwd: dir } });
       await refresh();
@@ -778,6 +778,197 @@ function renderDetail() {
   patchTimeline(t);
 }
 
+// ── folder picker ───────────────────────────────────────────────────────────
+
+/**
+ * A folder is typed, not browsed to in a native dialog: a small box under
+ * whatever asked, starting at home, completing directory names as you go. It
+ * only ever resolves to a directory that exists — the main process checks — so
+ * a typo cannot point a track at nothing.
+ */
+interface Picker {
+  resolve: (dir: string | null) => void;
+  /** Listings keyed by the parent as typed; fresh for every opening. */
+  cache: Map<string, string[] | null>;
+  matches: string[];
+  sel: number;
+  /** Drops listings that come back after the input has already moved on. */
+  seq: number;
+  away: (e: MouseEvent) => void;
+  restore: Element | null;
+}
+let picker: Picker | null = null;
+
+const PICKER_ROWS = 200;
+const PICKER_HINT = 'tab completes · enter chooses · esc cancels';
+
+const tildify = (abs: string, home: string) =>
+  abs === home ? '~' : abs.startsWith(`${home}/`) ? `~${abs.slice(home.length)}` : abs;
+
+/** '~/src/oh-m' → ['~/src/', 'oh-m']: where to look, and what to look for. */
+function splitPath(v: string): [string, string] {
+  const i = v.lastIndexOf('/');
+  return i < 0 ? ['', v] : [v.slice(0, i + 1), v.slice(i + 1)];
+}
+
+/**
+ * Exact name first, then names that start with what was typed, then names that
+ * merely contain it. Dot-folders stay out of the way until you type the dot.
+ */
+function rankDirs(dirs: string[], prefix: string): string[] {
+  const p = prefix.toLowerCase();
+  const shown = p.startsWith('.') ? dirs : dirs.filter((d) => !d.startsWith('.'));
+  if (!p) return shown;
+  const exact: string[] = [];
+  const starts: string[] = [];
+  const has: string[] = [];
+  for (const d of shown) {
+    const l = d.toLowerCase();
+    if (l === p) exact.push(d);
+    else if (l.startsWith(p)) starts.push(d);
+    else if (l.includes(p)) has.push(d);
+  }
+  return [...exact, ...starts, ...has];
+}
+
+async function pickFolder(anchor: HTMLElement, startIn?: string | null): Promise<string | null> {
+  if (picker) closePicker(null);
+  const root = await window.omi.listDir('~');
+  if (!root) return null;
+  const home = root.path;
+
+  return new Promise((resolve) => {
+    const host = $('fpick');
+    const away = (e: MouseEvent) => {
+      if (!host.contains(e.target as Node)) closePicker(null);
+    };
+    picker = {
+      resolve, cache: new Map([['~/', root.dirs]]), matches: [], sel: -1, seq: 0,
+      away, restore: document.activeElement,
+    };
+    host.innerHTML = `
+      <div class="fptop">
+        <input id="fpin" spellcheck="false" autocomplete="off" />
+        <button type="button" id="fpgo" class="wbtn">choose</button>
+      </div>
+      <div id="fplist" class="fplist"></div>
+      <div id="fphint" class="fphint">${PICKER_HINT}</div>`;
+    host.hidden = false;
+
+    // Under the thing that asked, kept on screen.
+    const r = anchor.getBoundingClientRect();
+    const width = Math.min(460, window.innerWidth - 32);
+    host.style.width = `${width}px`;
+    host.style.left = `${Math.max(16, Math.min(r.left, window.innerWidth - width - 16))}px`;
+    host.style.top = `${r.bottom + 6}px`;
+
+    const input = $<HTMLInputElement>('fpin');
+    const start = startIn ? tildify(startIn, home) : '~';
+    input.value = start.endsWith('/') ? start : `${start}/`;
+    input.oninput = () => void suggest();
+    input.onkeydown = onPickerKey;
+    $('fpgo').onclick = () => void choose();
+    document.addEventListener('mousedown', away, true);
+    input.focus();
+    void suggest();
+  });
+}
+
+function closePicker(dir: string | null) {
+  const p = picker;
+  if (!p) return;
+  picker = null;
+  document.removeEventListener('mousedown', p.away, true);
+  const host = $('fpick');
+  host.hidden = true;
+  host.innerHTML = '';
+  const back = p.restore;
+  if (back instanceof HTMLElement && back !== document.body && back.isConnected) back.focus();
+  else if (!wizard && !attachSheet) focusTerminal();
+  p.resolve(dir);
+}
+
+function setPickerHint(msg: string | null) {
+  const el = document.getElementById('fphint');
+  if (!el) return;
+  el.textContent = msg ?? PICKER_HINT;
+  el.classList.toggle('bad', msg !== null);
+}
+
+async function suggest() {
+  const p = picker;
+  if (!p) return;
+  const [parent, prefix] = splitPath($<HTMLInputElement>('fpin').value);
+  const seq = ++p.seq;
+  let dirs = p.cache.get(parent);
+  if (dirs === undefined) {
+    dirs = (await window.omi.listDir(parent || '~'))?.dirs ?? null;
+    p.cache.set(parent, dirs);
+  }
+  if (picker !== p || seq !== p.seq) return;
+  p.matches = dirs ? rankDirs(dirs, prefix) : [];
+  // With a name half typed, the best match is one keypress away; right after a
+  // slash nothing is, so Enter means the folder you are standing in.
+  p.sel = prefix && p.matches.length > 0 ? 0 : -1;
+  setPickerHint(dirs ? null : `${parent || '~'} is not a folder`);
+  renderPickerList(dirs === null ? '' : prefix ? 'no match' : 'no folders in here');
+}
+
+function renderPickerList(none = '') {
+  const p = picker;
+  if (!p) return;
+  const list = $('fplist');
+  list.innerHTML = p.matches.slice(0, PICKER_ROWS).map((d, i) => `
+    <div class="fprow ${i === p.sel ? 'on' : ''}" data-i="${i}">${esc(d)}<span class="muted">/</span></div>`)
+    .join('') || (none ? `<div class="fpnone">${none}</div>` : '');
+  for (const el of list.querySelectorAll<HTMLElement>('.fprow')) {
+    // Keep the caret in the input: the list is only ever a shortcut for typing.
+    el.onmousedown = (e) => e.preventDefault();
+    el.onclick = () => descend(Number(el.dataset.i));
+  }
+  list.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
+}
+
+/** Completes the input to a folder and lists what is inside it. */
+function descend(i: number) {
+  const p = picker;
+  const name = p?.matches[i];
+  if (!p || name === undefined) return;
+  const input = $<HTMLInputElement>('fpin');
+  input.value = `${splitPath(input.value)[0]}${name}/`;
+  input.focus();
+  void suggest();
+}
+
+async function choose() {
+  const p = picker;
+  if (!p) return;
+  const value = $<HTMLInputElement>('fpin').value;
+  const typed = p.sel >= 0 ? splitPath(value)[0] + p.matches[p.sel] : value;
+  const r = await window.omi.listDir(typed || '~');
+  if (picker !== p) return;
+  if (!r) { setPickerHint(`${typed} is not a folder`); return; }
+  closePicker(r.path);
+}
+
+function onPickerKey(e: KeyboardEvent) {
+  const p = picker;
+  if (!p) return;
+  const n = Math.min(p.matches.length, PICKER_ROWS);
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (n === 0) return;
+    p.sel = e.key === 'ArrowDown' ? (p.sel + 1) % n : p.sel <= 0 ? n - 1 : p.sel - 1;
+    renderPickerList();
+  } else if (e.key === 'Tab') {
+    e.preventDefault();
+    descend(p.sel >= 0 ? p.sel : 0);
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    void choose();
+  }
+}
+
 // ── new track ───────────────────────────────────────────────────────────────
 
 /**
@@ -871,7 +1062,7 @@ function renderWizard() {
   }
 
   $('wpick').onclick = async () => {
-    const dir = await window.omi.pickFolder(w.cwd ?? undefined);
+    const dir = await pickFolder($('wpick'), w.cwd);
     if (!dir || !wizard) return;
     wizard.cwd = dir;
     wizard.picked.clear();
@@ -1096,6 +1287,8 @@ async function boot() {
   $('new').onclick = () => openWizard();
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
+    // Innermost first: the picker can sit on top of the new-track sheet.
+    if (picker) { e.stopPropagation(); closePicker(null); return; }
     if (wizard || attachSheet) { closeModal(); return; }
     const side = document.getElementById('side');
     if (side?.classList.contains('open')) {

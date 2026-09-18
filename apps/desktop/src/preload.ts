@@ -8,7 +8,7 @@ contextBridge.exposeInMainWorld('omi', {
   rpc: (method: string, params?: unknown) => ipcRenderer.invoke('omi:rpc', method, params),
   welcome: () => ipcRenderer.invoke('omi:welcome'),
   openExternal: (url: string) => ipcRenderer.invoke('omi:openExternal', url),
-  pickFolder: (startIn?: string) => ipcRenderer.invoke('omi:pickFolder', startIn),
+  listDir: (raw: string) => ipcRenderer.invoke('omi:listDir', raw),
 
   ptyInput: (viewId: string, bytes: Uint8Array) => ipcRenderer.send('omi:ptyInput', viewId, bytes),
   onPty: (cb: (viewId: string, epoch: number, offset: string, bytes: Uint8Array) => void) =>

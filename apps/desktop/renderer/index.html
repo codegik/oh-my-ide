@@ -158,6 +158,24 @@
   .wlink { display:block; margin-top:8px; background:none; border:none; padding:0; cursor:pointer;
            color:var(--ON_CLAUDE); font:inherit; font-size:var(--fs-xs); text-align:left; }
 
+  /* folder picker: a box that completes as you type, floated under whatever asked */
+  #fpick { position:fixed; z-index:90; background:var(--panel); border:1px solid var(--line);
+           border-radius:8px; padding:8px; box-shadow:0 16px 48px rgba(0,0,0,.65); }
+  #fpick[hidden] { display:none; }
+  .fptop { display:flex; gap:6px; }
+  .fptop .wbtn { padding:4px 11px; }
+  #fpin { flex:1; min-width:0; background:#0b0d12; border:1px solid var(--line); border-radius:6px;
+          color:var(--text); font:inherit; font-size:var(--fs-s); padding:6px 8px; outline:none; }
+  #fpin:focus { border-color:var(--ON_CLAUDE); }
+  .fplist { max-height:240px; overflow:auto; margin-top:6px; }
+  .fprow { padding:3px 8px; border-radius:4px; font-size:var(--fs-s); cursor:pointer;
+           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .fprow:hover { background:#1a1e29; }
+  .fprow.on { background:#1d2230; box-shadow:inset 2px 0 0 var(--ON_CLAUDE); }
+  .fpnone { padding:3px 8px; font-size:var(--fs-s); color:var(--dim); }
+  .fphint { margin-top:6px; padding:0 2px; font-size:var(--fs-xs); color:var(--dim); }
+  .fphint.bad { color:#ff8f75; }
+
   #why { position:fixed; right:350px; top:90px; z-index:50; width:300px; background:var(--panel);
          border:1px solid var(--line); border-radius:8px; padding:11px 13px;
          box-shadow:0 12px 40px rgba(0,0,0,.6); font-size:var(--fs-s); }
@@ -216,6 +234,7 @@
   </main>
   <div id="why" hidden></div>
   <div id="modal" hidden></div>
+  <div id="fpick" hidden></div>
   <script src="./bundle.js"></script>
 </body>
 </html>
