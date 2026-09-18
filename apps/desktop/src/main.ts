@@ -345,6 +345,10 @@ function createWindow(): void {
       ],
     },
   });
+  // Electron's default menu takes a row of the window, and its accelerators
+  // steal keys the terminals need (Ctrl+R reloads, Ctrl+W closes the window).
+  // macOS keeps it: it lives in the system bar and carries Cmd+C/V/Q there.
+  if (process.platform !== 'darwin') win.removeMenu();
   void win.loadFile(RENDERER_HTML);
 }
 

@@ -7,6 +7,30 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# Launched from a desktop entry, this gets the session's PATH, not the shell's:
+# node from nvm/mise/etc. is set up in the shell rc, so it is missing here, and
+# pnpm and electron's launcher (a node script) die with "command not found"
+# (or a different node is found, without pnpm and claude next to it). Borrow
+# PATH from an interactive login shell; the marker skips what the rc files print.
+if ! { command -v node && command -v pnpm && command -v claude; } >/dev/null 2>&1; then
+  shell_path="$("${SHELL:-/bin/bash}" -lic 'printf "\n__OMI_PATH__%s" "$PATH"' 2>/dev/null </dev/null \
+    | sed -n 's/^__OMI_PATH__//p' | tail -1)" || true
+  [ -n "$shell_path" ] && export PATH="$shell_path"
+fi
+
+# With no terminal (Terminal=false in the desktop entry), output goes nowhere,
+# so a failed launch looks like nothing happened. Keep a log and say so. Test
+# for a controlling terminal, not `-t 1`, so `./start.sh status | grep` still
+# prints where it was asked to.
+if ! { : >/dev/tty; } 2>/dev/null; then
+  LOG="${XDG_STATE_HOME:-$HOME/.local/state}/oh-my-ide/start.log"
+  mkdir -p "$(dirname "$LOG")"
+  exec >>"$LOG" 2>&1
+  echo "--- $(date '+%F %T') start.sh $*"
+  trap 'rc=$?; [ $rc -eq 0 ] || { command -v notify-send >/dev/null 2>&1 &&
+    notify-send -a oh-my-ide "oh-my-ide failed to start" "exit $rc; see $LOG"; }' EXIT
+fi
+
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/omi-$(id -u)}/oh-my-ide"
 SOCKET="$RUNTIME_DIR/daemon.sock"
 DAEMON_ENTRY="apps/daemon/dist/index.cjs"
