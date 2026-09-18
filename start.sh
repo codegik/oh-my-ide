@@ -11,6 +11,7 @@ RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/omi-$(id -u)}/oh-my-ide"
 SOCKET="$RUNTIME_DIR/daemon.sock"
 DAEMON_ENTRY="apps/daemon/dist/index.cjs"
 DESKTOP_ENTRY="apps/desktop/dist/main.cjs"
+RENDERER_BUNDLE="apps/desktop/renderer/bundle.js"
 
 usage() {
   cat <<'EOF'
@@ -34,6 +35,22 @@ daemon_alive() {
     s.on("connect", () => { s.destroy(); process.exit(0); });
     s.on("error", () => process.exit(1));
   ' "$SOCKET" 2>/dev/null
+}
+
+# True (exit 0) if a build is needed: an entry is missing, or some package's
+# source is newer than what was actually built from it. The daemon and the
+# desktop app both outlive this script, so "the file exists" alone is not
+# enough — the desktop's own stale-build check (see apps/daemon/src/index.ts,
+# BUILD_ID) only fires against whatever is on disk *right now*, so a launch
+# that skips a needed rebuild ships old code silently, with no error at all.
+stale() {
+  for f in "$DAEMON_ENTRY" "$DESKTOP_ENTRY" "$RENDERER_BUNDLE"; do
+    [ -f "$f" ] || return 0
+  done
+  find packages apps -path '*/node_modules' -prune -o -path '*/dist' -prune -o \
+       -type f \( -name '*.ts' -o -name '*.tsx' \) \
+       \( -newer "$DAEMON_ENTRY" -o -newer "$DESKTOP_ENTRY" -o -newer "$RENDERER_BUNDLE" \) \
+       -print -quit 2>/dev/null | grep -q .
 }
 
 doctor() {
@@ -73,7 +90,7 @@ case "${1:-run}" in
   doctor) echo "oh-my-ide prerequisites:"; doctor ;;
   build)  build ;;
   daemon)
-    [ -f "$DAEMON_ENTRY" ] || build
+    stale && build
     ensure_electron || exit 1
     exec env ELECTRON_RUN_AS_NODE=1 node_modules/.bin/electron "$DAEMON_ENTRY"
     ;;
@@ -132,8 +149,8 @@ case "${1:-run}" in
     ' "$SOCKET"
     ;;
   run)
-    if [ ! -f "$DESKTOP_ENTRY" ] || [ ! -f "$DAEMON_ENTRY" ]; then
-      echo "==> first run: building"; build
+    if stale; then
+      echo "==> building (missing or out of date)"; build
     fi
     ensure_electron || exit 1
     echo "==> starting oh-my-ide (the daemon keeps running after you close the window)"
