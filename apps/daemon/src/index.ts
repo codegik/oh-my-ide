@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { ClaudeBgRunner, probe, shortIdOf } from '@omi/claude-adapter';
+import { ClaudeBgRunner, isSameSession, probe, shortIdOf } from '@omi/claude-adapter';
 import type { ClaudeCompat, NormalizedSession } from '@omi/claude-adapter';
 import { parseRef } from '@omi/core';
 import { Db } from '@omi/db';
@@ -19,6 +19,26 @@ import { PtyHub } from './pty.js';
 
 const DAEMON_VERSION = '0.0.2';
 const STARTED_AT = Date.now();
+
+/**
+ * Which build of this file is actually running.
+ *
+ * The daemon outlives the app on purpose, so after a rebuild the new window
+ * talks to whatever daemon was already listening — old code, new renderer. That
+ * skew used to surface as `no such method: <whatever was added>` from deep
+ * inside an unrelated click. Stamping the bundle we loaded lets the desktop
+ * notice and restart us instead of guessing. mtime of our own file is enough:
+ * a rebuild always rewrites it.
+ */
+const ENTRY = __filename;
+const BUILD_ID = (() => {
+  try {
+    const st = fs.statSync(ENTRY);
+    return `${Math.round(st.mtimeMs)}-${st.size}`;
+  } catch {
+    return 'unknown';
+  }
+})();
 
 const DATA_DIR = path.join(
   process.env.XDG_DATA_HOME ?? path.join(os.homedir(), '.local', 'share'),
@@ -68,10 +88,12 @@ function broadcast(msg: unknown): void {
 async function syncSessions(): Promise<NormalizedSession[]> {
   const sessions = await runner.list();
   const touched = new Set<number>();
-  for (const s of sessions) {
-    for (const id of db.setRefState('claude_session', `claude:${s.sessionId}`, s.state)) {
-      touched.add(id);
-    }
+  // Walk our refs rather than the listing: a session can be listed under a
+  // newer UUID than the one we stored (see isSameSession).
+  for (const ext of new Set(db.listSessionRefs().map((r) => r.externalId))) {
+    const s = sessions.find((x) => isSameSession(x, ext.replace(/^claude:/, '')));
+    if (!s) continue;
+    for (const id of db.setRefState('claude_session', ext, s.state)) touched.add(id);
   }
   if (touched.size > 0) broadcast({ t: 'changed', entity: 'track', ids: [...touched] });
   return sessions;
@@ -151,7 +173,22 @@ const methods: Record<string, Handler> = {
    * only asks for these when you open the `done` section — there is no reason to
    * carry a year of closed work in every five-second poll.
    */
-  'tracks.closed': async () => db.listTracks(true).filter((t) => t.lifecycle !== 'open'),
+  'tracks.closed': async () => db.listClosed(),
+  /**
+   * Archived tracks, newest archived first. Archiving only hides a finished
+   * track: its done/dropped status is kept, so restoring puts it back as it was.
+   */
+  'tracks.archived': async () => db.listArchived(),
+  'tracks.archive': async (p) => {
+    const t = db.archiveTrack(Number(p.id));
+    broadcast({ t: 'changed', entity: 'track', ids: [t.id] });
+    return t;
+  },
+  'tracks.restore': async (p) => {
+    const t = db.restoreTrack(Number(p.id));
+    broadcast({ t: 'changed', entity: 'track', ids: [t.id] });
+    return t;
+  },
   'tracks.get': async (p) => db.getTrack(Number(p.id)),
   'tracks.create': async (p) => {
     const t = db.createTrack({
@@ -169,6 +206,7 @@ const methods: Record<string, Handler> = {
     return t;
   },
   'tracks.timeline': async (p) => db.timeline(Number(p.id)),
+  'tracks.notes': async (p) => db.notes(Number(p.id)),
   'tracks.pin': async (p) => {
     if (p.court === null) db.unpin(Number(p.id));
     else db.pin(Number(p.id), p.court, p.kind ?? 'hard', p.expiresAt ?? undefined);
@@ -245,6 +283,40 @@ const methods: Record<string, Handler> = {
       linkRule: 'started-here',
     });
     db.adoptOrphanRefs(track.id, `claude:${started.sessionId}`);
+    // Starting over from a session that is gone: bring its refs along.
+    if (typeof p.carryFrom === 'string' && p.carryFrom) {
+      db.moveSessionRefs(track.id, p.carryFrom, `claude:${started.sessionId}`);
+    }
+    broadcast({ t: 'changed', entity: 'track', ids: [track.id] });
+    return { track: db.getTrack(track.id), session: started };
+  },
+
+  /**
+   * Wakes a session that stopped. `claude --resume` without --fork-session keeps
+   * the session id and its original folder, so every ref it held is still its
+   * own — nothing to re-link.
+   */
+  'tracks.resumeSession': async (p) => {
+    const track = db.getTrack(Number(p.id));
+    if (!track) throw new Error('no such track');
+    const ext = String(p.session ?? '');
+    const ref = track.refs.find((r) => r.kind === 'claude_session' && r.externalId === ext);
+    if (!ref) throw new Error('that session is not part of this track');
+    const sessionId = ext.replace(/^claude:/, '');
+    // It may never have stopped — only looked that way to a caller matching on
+    // the UUID. Resuming it again would start a second, empty session.
+    const live = (await runner.list()).find((s) => isSameSession(s, sessionId));
+    if (live) {
+      db.setRefState('claude_session', ext, live.state);
+      broadcast({ t: 'changed', entity: 'track', ids: [track.id] });
+      return { track: db.getTrack(track.id), session: { ...live, sessionId } };
+    }
+    const started = await runner.resume({ sessionId, ...(track.cwd ? { cwd: track.cwd } : {}) });
+    // The CLI can continue the conversation under a new id; follow it, or the
+    // tab keeps pointing at the one that is gone.
+    const now = `claude:${started.sessionId}`;
+    if (now !== ext) db.repointSession(track.id, ext, now);
+    db.setRefState('claude_session', now, 'STARTING');
     broadcast({ t: 'changed', entity: 'track', ids: [track.id] });
     return { track: db.getTrack(track.id), session: started };
   },
@@ -264,7 +336,7 @@ const methods: Record<string, Handler> = {
       body: String(p.text ?? ''),
     });
     broadcast({ t: 'changed', entity: 'track', ids: [Number(p.id)] });
-    return db.timeline(Number(p.id));
+    return db.notes(Number(p.id));
   },
 
   // ── pty ───────────────────────────────────────────────────────────────────
@@ -337,6 +409,8 @@ async function dispatch(sock: net.Socket, msg: Record<string, unknown>): Promise
         t: 'welcome',
         protocol: PROTOCOL_VERSION,
         daemonVersion: DAEMON_VERSION,
+        entry: ENTRY,
+        buildId: BUILD_ID,
         pid: process.pid,
         startedAt: STARTED_AT,
         claude: { cliVersion: c.cliVersion, tier: c.tier, notes: c.notes },

@@ -187,8 +187,22 @@ WHERE kind <> 'claude_session'
   );
 `;
 
+/**
+ * Migration 0004. Finished tracks can be archived out of the `done` list.
+ *
+ * Archiving is a visibility flag, not a third lifecycle: the track stays done
+ * or dropped underneath, so restoring it puts it back exactly as it was. A
+ * nullable column is a plain ADD COLUMN — no rebuild — and every existing row
+ * starts unarchived.
+ */
+export const MIGRATION_0004 = `
+ALTER TABLE track ADD COLUMN archived_at INTEGER;
+CREATE INDEX track_archived ON track(archived_at DESC) WHERE archived_at IS NOT NULL;
+`;
+
 export const MIGRATIONS: { version: number; sql: string }[] = [
   { version: 1, sql: MIGRATION_0001 },
   { version: 2, sql: MIGRATION_0002 },
   { version: 3, sql: MIGRATION_0003 },
+  { version: 4, sql: MIGRATION_0004 },
 ];

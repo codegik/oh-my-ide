@@ -75,7 +75,8 @@ export interface SessionRunner {
   start(o: { cwd: string; prompt?: string; name?: string; sessionId?: string }): Promise<StartedSession>;
   /** argv for a PTY the daemon owns, and for the "attach in your terminal" button. */
   attachCommand(s: { shortId: string }): { file: string; args: string[] };
-  resume(o: { sessionId: string; fork?: boolean }): Promise<StartedSession>;
+  /** `cwd` matters: the CLI looks a transcript up under the folder it runs in. */
+  resume(o: { sessionId: string; cwd?: string; fork?: boolean }): Promise<StartedSession>;
   stop(s: { shortId: string }): Promise<void>;
   remove(s: { shortId: string }): Promise<void>;
   list(): Promise<NormalizedSession[]>;

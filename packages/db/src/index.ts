@@ -25,6 +25,8 @@ export interface TrackRow {
   snoozeUntil: number | null;
   lastActivityAt: number;
   createdAt: number;
+  /** Set while a finished track is archived out of the `done` list. */
+  archivedAt: number | null;
   refs: TrackRef[];
 }
 
@@ -119,6 +121,59 @@ export class Db {
     return (this.db.prepare(sql).all() as Record<string, unknown>[]).map((r) => this.hydrate(r));
   }
 
+  /** The `done` section: finished tracks, most recently active first, minus archived ones. */
+  listClosed(): TrackRow[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT * FROM track WHERE lifecycle <> 'open' AND archived_at IS NULL
+            ORDER BY last_activity_at DESC`,
+        )
+        .all() as Record<string, unknown>[]
+    ).map((r) => this.hydrate(r));
+  }
+
+  /** Archived tracks, most recently archived first. */
+  listArchived(): TrackRow[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM track WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC')
+        .all() as Record<string, unknown>[]
+    ).map((r) => this.hydrate(r));
+  }
+
+  /**
+   * Hides a finished track from the `done` list. Only a finished one: an open
+   * track archived out of sight would still be work nobody can see.
+   *
+   * No event is written on purpose — events bump last_activity_at, and that
+   * would reorder the track when it is restored. It should come back exactly
+   * where it was.
+   */
+  archiveTrack(id: number): TrackRow {
+    const cur = this.db.prepare('SELECT lifecycle FROM track WHERE id = ?').get(id) as
+      | { lifecycle: string }
+      | undefined;
+    if (!cur) throw new Error(`no such track: ${id}`);
+    if (cur.lifecycle === 'open') {
+      throw new Error('only a finished track can be archived; finish it first');
+    }
+    const now = Date.now();
+    this.db
+      .prepare('UPDATE track SET archived_at = COALESCE(archived_at, ?), updated_at = ? WHERE id = ?')
+      .run(now, now, id);
+    return this.getTrack(id) as TrackRow;
+  }
+
+  /** Puts an archived track back in the `done` list; its lifecycle was never touched. */
+  restoreTrack(id: number): TrackRow {
+    const info = this.db
+      .prepare('UPDATE track SET archived_at = NULL, updated_at = ? WHERE id = ?')
+      .run(Date.now(), id);
+    if (info.changes === 0) throw new Error(`no such track: ${id}`);
+    return this.getTrack(id) as TrackRow;
+  }
+
   updateTrack(
     id: number,
     patch: Partial<{
@@ -181,7 +236,9 @@ export class Db {
      */
     if (patch.lifecycle) {
       if (patch.lifecycle === 'open') {
-        sets.push('closed_at = NULL', 'closed_reason = NULL');
+        // An open track is never archived: reopening one would otherwise leave
+        // it in the open list and the archive at once.
+        sets.push('closed_at = NULL', 'closed_reason = NULL', 'archived_at = NULL');
       } else {
         sets.push('closed_at = ?', 'closed_reason = ?');
         vals.push(now, patch.lifecycle);
@@ -291,6 +348,35 @@ export class Db {
    * it was written before the track had any session, so whichever session
    * arrives first is the one it was really about.
    */
+  /**
+   * Hands everything one session held to another: for a session that cannot be
+   * resumed, so starting over does not mean re-linking every PR and ticket.
+   * OR IGNORE leaves behind anything the new session already holds.
+   */
+  moveSessionRefs(trackId: number, fromSession: string, toSession: string): void {
+    this.db
+      .prepare(
+        `UPDATE OR IGNORE track_ref SET session_id = ?, updated_at = ?
+          WHERE track_id = ? AND session_id = ? AND kind <> 'claude_session'`,
+      )
+      .run(toSession, Date.now(), trackId, fromSession);
+  }
+
+  /**
+   * The same conversation, now under another id — resuming can hand back a copy
+   * instead of the original. The session ref keeps its row, label and tab, and
+   * everything linked to it follows.
+   */
+  repointSession(trackId: number, fromSession: string, toSession: string): void {
+    this.db
+      .prepare(
+        `UPDATE OR IGNORE track_ref SET external_id = ?, updated_at = ?
+          WHERE track_id = ? AND kind = 'claude_session' AND external_id = ?`,
+      )
+      .run(toSession, Date.now(), trackId, fromSession);
+    this.moveSessionRefs(trackId, fromSession, toSession);
+  }
+
   adoptOrphanRefs(trackId: number, sessionExternalId: string): void {
     this.db
       .prepare(
@@ -345,6 +431,18 @@ export class Db {
   timeline(trackId: number, limit = 200): Record<string, unknown>[] {
     return this.db
       .prepare('SELECT * FROM event WHERE track_id = ? ORDER BY occurred_at DESC LIMIT ?')
+      .all(trackId, limit) as Record<string, unknown>[];
+  }
+
+  /**
+   * Only what the user wrote. Filtered in SQL, not after the LIMIT, so a busy
+   * track's system events can never push its notes out of the window.
+   */
+  notes(trackId: number, limit = 200): Record<string, unknown>[] {
+    return this.db
+      .prepare(
+        "SELECT * FROM event WHERE track_id = ? AND source = 'user' AND kind = 'note' ORDER BY occurred_at DESC LIMIT ?",
+      )
       .all(trackId, limit) as Record<string, unknown>[];
   }
 
@@ -474,6 +572,7 @@ export class Db {
       snoozeUntil: (r.snooze_until as number | null) ?? null,
       lastActivityAt: r.last_activity_at as number,
       createdAt: r.created_at as number,
+      archivedAt: (r.archived_at as number | null) ?? null,
       refs: this.refsOf(r.id as number),
     };
   }

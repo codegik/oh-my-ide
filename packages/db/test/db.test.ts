@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { Db, MIGRATION_0001 } from '../src/index.js';
+import { Db, MIGRATION_0001, MIGRATIONS } from '../src/index.js';
 
 const fresh = () => new Db(':memory:');
 
@@ -89,6 +89,49 @@ describe('Db', () => {
     const before = db.getTrack(t.id)?.lastActivityAt ?? 0;
     db.addEvent({ trackId: t.id, source: 'claude', kind: 'x', title: 'y', occurredAt: before + 5000 });
     expect(db.getTrack(t.id)?.lastActivityAt).toBe(before + 5000);
+    db.close();
+  });
+
+  it('notes returns only what the user wrote, even behind a flood of events', () => {
+    const db = fresh();
+    const t = db.createTrack({ title: 'x' });
+    db.addEvent({ trackId: t.id, source: 'user', kind: 'note', title: 'first', occurredAt: 1 });
+    // More system events than the limit, all newer than the note.
+    for (let i = 0; i < 5; i++) {
+      db.addEvent({ trackId: t.id, source: 'claude', kind: 'session.named', title: `e${i}`, occurredAt: 10 + i });
+    }
+    db.addEvent({ trackId: t.id, source: 'user', kind: 'note', title: 'second', occurredAt: 100 });
+    expect(db.notes(t.id, 3).map((e) => e.title)).toEqual(['second', 'first']);
+    db.close();
+  });
+
+  it('moves a stopped session\'s refs to a new session, leaving ones it already holds', () => {
+    const db = fresh();
+    const t = db.createTrack({ title: 'x' });
+    db.addRef({ trackId: t.id, kind: 'claude_session', externalId: 'claude:old' });
+    db.addRef({ trackId: t.id, kind: 'claude_session', externalId: 'claude:new' });
+    db.addRef({ trackId: t.id, sessionId: 'claude:old', kind: 'github_pr', externalId: 'a/b#1' });
+    db.addRef({ trackId: t.id, sessionId: 'claude:old', kind: 'jira_issue', externalId: 'PAY-1' });
+    db.addRef({ trackId: t.id, sessionId: 'claude:new', kind: 'jira_issue', externalId: 'PAY-1' });
+    db.moveSessionRefs(t.id, 'claude:old', 'claude:new');
+    const held = (s: string) =>
+      db.getTrack(t.id)?.refs.filter((r) => r.sessionId === s).map((r) => r.externalId).sort();
+    expect(held('claude:new')).toEqual(['PAY-1', 'a/b#1']);
+    // The duplicate stays behind rather than failing the whole move.
+    expect(held('claude:old')).toEqual(['PAY-1']);
+    db.close();
+  });
+
+  it('re-points a resumed session to its new id, keeping its label and refs', () => {
+    const db = fresh();
+    const t = db.createTrack({ title: 'x' });
+    db.addRef({ trackId: t.id, kind: 'claude_session', externalId: 'claude:old', label: 'Security issues' });
+    db.addRef({ trackId: t.id, sessionId: 'claude:old', kind: 'github_pr', externalId: 'a/b#1' });
+    db.repointSession(t.id, 'claude:old', 'claude:new');
+    const refs = db.getTrack(t.id)?.refs ?? [];
+    const sess = refs.filter((r) => r.kind === 'claude_session');
+    expect(sess.map((r) => [r.externalId, r.label])).toEqual([['claude:new', 'Security issues']]);
+    expect(refs.find((r) => r.kind === 'github_pr')?.sessionId).toBe('claude:new');
     db.close();
   });
 
@@ -267,6 +310,97 @@ describe('Db', () => {
     db.updateTrack(t.id, { lifecycle: 'open' });
     expect(db.listTracks().map((r) => r.id)).toContain(t.id);
     expect(db.getTrack(t.id)?.lifecycle).toBe('open');
+    db.close();
+  });
+
+  it('archiving a finished track hides it from the done list', () => {
+    const db = fresh();
+    const a = db.createTrack({ title: 'a' });
+    const b = db.createTrack({ title: 'b' });
+    db.updateTrack(a.id, { lifecycle: 'done' });
+    db.updateTrack(b.id, { lifecycle: 'dropped' });
+    expect(db.listClosed().map((r) => r.id).sort()).toEqual([a.id, b.id].sort());
+
+    const archived = db.archiveTrack(a.id);
+    expect(archived.archivedAt).not.toBeNull();
+    expect(db.listClosed().map((r) => r.id)).toEqual([b.id]);
+    expect(db.listArchived().map((r) => r.id)).toEqual([a.id]);
+    // Archiving is a visibility flag: the lifecycle underneath is untouched.
+    expect(db.getTrack(a.id)?.lifecycle).toBe('done');
+    db.close();
+  });
+
+  it('restoring puts an archived track back in the done list exactly as it was', () => {
+    const db = fresh();
+    const t = db.createTrack({ title: 'x' });
+    db.updateTrack(t.id, { lifecycle: 'dropped' });
+    const before = db.getTrack(t.id);
+
+    db.archiveTrack(t.id);
+    const restored = db.restoreTrack(t.id);
+    expect(restored.archivedAt).toBeNull();
+    expect(restored.lifecycle).toBe('dropped');
+    expect(restored.court).toBe(before?.court);
+    // No event on either side, so its place in the recency order is kept.
+    expect(restored.lastActivityAt).toBe(before?.lastActivityAt);
+    expect(db.listClosed().map((r) => r.id)).toContain(t.id);
+    expect(db.listArchived()).toHaveLength(0);
+    db.close();
+  });
+
+  it('lists archived tracks newest archived first', () => {
+    const db = fresh();
+    const a = db.createTrack({ title: 'a' });
+    const b = db.createTrack({ title: 'b' });
+    db.updateTrack(a.id, { lifecycle: 'done' });
+    db.updateTrack(b.id, { lifecycle: 'done' });
+    db.archiveTrack(a.id);
+    db.archiveTrack(b.id);
+    expect(db.listArchived().map((r) => r.id)).toEqual([b.id, a.id]);
+    db.close();
+  });
+
+  it('refuses to archive a track that is still open', () => {
+    const db = fresh();
+    const t = db.createTrack({ title: 'x' });
+    expect(() => db.archiveTrack(t.id)).toThrow(/only a finished track can be archived/);
+    expect(db.getTrack(t.id)?.archivedAt).toBeNull();
+    expect(db.listArchived()).toHaveLength(0);
+    db.close();
+  });
+
+  it('reopening an archived track takes it out of the archive', () => {
+    const db = fresh();
+    const t = db.createTrack({ title: 'x' });
+    db.updateTrack(t.id, { lifecycle: 'done' });
+    db.archiveTrack(t.id);
+    db.updateTrack(t.id, { lifecycle: 'open' });
+    expect(db.getTrack(t.id)?.archivedAt).toBeNull();
+    expect(db.listArchived()).toHaveLength(0);
+    expect(db.listTracks().map((r) => r.id)).toContain(t.id);
+    db.close();
+  });
+
+  it('adds archived_at to an existing v3 database without losing its tracks', () => {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'omi-mig-')), 'omid.db');
+    const raw = new Database(file);
+    for (const m of MIGRATIONS.filter((x) => x.version <= 3)) raw.exec(m.sql);
+    raw.pragma('user_version = 3');
+    const now = Date.now();
+    raw.prepare(
+      `INSERT INTO track (id, public_id, title, lifecycle, court, closed_at, closed_reason,
+                          last_activity_at, created_at, updated_at)
+       VALUES (1, 'p1', 'finished work', 'done', 'DONE', ?, 'done', ?, ?, ?)`,
+    ).run(now, now, now, now);
+    raw.close();
+
+    const db = new Db(file);
+    const t = db.getTrack(1);
+    expect(t?.title).toBe('finished work');
+    expect(t?.archivedAt).toBeNull();
+    expect(db.listClosed().map((r) => r.id)).toEqual([1]);
+    db.archiveTrack(1);
+    expect(db.listArchived().map((r) => r.id)).toEqual([1]);
     db.close();
   });
 

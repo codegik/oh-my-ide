@@ -62,17 +62,17 @@ export class ClaudeBgRunner implements SessionRunner {
     return { file: 'claude', args: ['attach', s.shortId] };
   }
 
-  async resume(o: { sessionId: string; fork?: boolean }): Promise<StartedSession> {
+  async resume(o: { sessionId: string; cwd?: string; fork?: boolean }): Promise<StartedSession> {
     const args = ['--bg', '--resume', o.sessionId];
     if (o.fork) args.push('--fork-session');
-    const stdout = await runClaude(args, { timeoutMs: 60_000 });
+    const stdout = await runClaude(args, { ...(o.cwd ? { cwd: o.cwd } : {}), timeoutMs: 60_000 });
     const shortId = parseBackgroundedId(stdout) ?? shortIdOf(o.sessionId);
     const found = (await this.list()).find((s) => s.shortId === shortId);
     return {
       shortId,
       sessionId: found?.sessionId ?? o.sessionId,
       name: found?.name ?? null,
-      cwd: found?.cwd ?? process.cwd(),
+      cwd: found?.cwd ?? o.cwd ?? process.cwd(),
     };
   }
 

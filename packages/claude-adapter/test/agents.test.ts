@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { normalizeRow, parseAgentList, shortIdOf } from '../src/agents.js';
+import { isSameSession, normalizeRow, parseAgentList, shortIdOf } from '../src/agents.js';
 
 const fixture = readFileSync(
   new URL('../../../tools/fixtures/agents-2.1.272.json', import.meta.url),
@@ -73,5 +73,28 @@ describe('empty-string state (regression)', () => {
       state: '',
     });
     expect(s.state).toBe('UNKNOWN');
+  });
+});
+
+describe('isSameSession', () => {
+  // Observed: a --bg session that entered a worktree is listed under a new UUID
+  // while its job keeps the short id it was launched with.
+  const moved = normalizeRow({
+    id: 'f366faee',
+    sessionId: '854ac96e-41ee-4f6e-bf6b-2a115a5c184e',
+    cwd: '/repo/.claude/worktrees/x',
+    kind: 'background',
+    state: 'done',
+  });
+
+  it('finds a background job by the id it was launched with', () => {
+    expect(isSameSession(moved, 'f366faee-2b88-4621-b7db-403a517aab90')).toBe(true);
+    expect(isSameSession(moved, '854ac96e-41ee-4f6e-bf6b-2a115a5c184e')).toBe(true);
+    expect(isSameSession(moved, '5f49964c-851b-42af-8149-b02548c17b82')).toBe(false);
+  });
+
+  it('matches an interactive session only by its uuid', () => {
+    const inter = normalizeRow({ sessionId: 'aaaaaaaa-0000-0000-0000-000000000000', cwd: '/x', kind: 'interactive' });
+    expect(isSameSession(inter, 'aaaaaaaa-0000-0000-0000-000000000000')).toBe(true);
   });
 });

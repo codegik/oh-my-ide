@@ -17,6 +17,7 @@ declare global {
       ptyInput(viewId: string, bytes: Uint8Array): void;
       onPty(cb: (viewId: string, epoch: number, offset: string, bytes: Uint8Array) => void): void;
       onEvent(cb: (msg: any) => void): void;
+      osFont: { ui: number | null; mono: number | null };
     };
   }
 }
@@ -70,6 +71,7 @@ interface Track {
   court: string; courtReason: string | null; courtRule: string | null; courtSource: string;
   lifecycle: 'open' | 'done' | 'dropped';
   originUrl: string | null; lastActivityAt: number; cwd: string | null;
+  archivedAt: number | null;
   refs: Ref[];
 }
 
@@ -81,6 +83,8 @@ let tracks: Track[] = [];
  */
 let closedTracks: Track[] = [];
 let doneOpen = false;
+/** Archived tracks, fetched alongside the done list so its entry can show a count. */
+let archivedTracks: Track[] = [];
 let sessions: any[] = [];
 let openTabs: number[] = [];
 let activeTab: number | null = null;
@@ -150,12 +154,20 @@ function scheduleFit(viewId: string) {
   });
 }
 
+// Match the desktop's text size. This runs before first paint (the bundle is
+// the last thing in <body>), so the UI never flashes at the fallback size.
+if (window.omi.osFont.ui) {
+  document.documentElement.style.setProperty('--fs-s', `${window.omi.osFont.ui}px`);
+}
+/** Whole pixels: xterm measures cells from this, and a fraction blurs the grid. */
+const TERM_FONT_PX = Math.round(window.omi.osFont.mono ?? 14);
+
 function termFor(viewId: string) {
   let t = terms.get(viewId);
   if (t) return t;
   const term = new Terminal({
     fontFamily: '"JetBrains Mono","Fira Code",monospace',
-    fontSize: 14, scrollback: 10_000, cursorBlink: true,
+    fontSize: TERM_FONT_PX, scrollback: 10_000, cursorBlink: true,
     theme: { background: '#0b0d12', foreground: '#e6e9f0' },
   });
   const fit = new FitAddon();
@@ -231,8 +243,12 @@ const shortIdOf = (sessionId: string) => sessionId.replace(/-/g, '').slice(0, 8)
  * `claude attach` only works on BACKGROUND jobs. An interactive session is a
  * terminal someone else already owns; there is nothing for us to attach to.
  */
-const liveSession = (ref: { externalId: string }) =>
-  sessions.find((s) => s.sessionId === sessionIdOf(ref));
+const liveSession = (ref: { externalId: string }) => {
+  const id = sessionIdOf(ref);
+  // By job too, not just UUID: a background session that moves into a worktree
+  // is listed under a new UUID, but keeps the short id it was launched with.
+  return sessions.find((s) => s.sessionId === id || (s.kind === 'background' && s.shortId === shortIdOf(id)));
+};
 const isAttachable = (ref: { externalId: string }) => liveSession(ref)?.kind === 'background';
 
 const sessionRefsOf = (t: Track) => t.refs.filter((r) => r.kind === 'claude_session');
@@ -265,11 +281,20 @@ function currentSession(t: Track): Ref | undefined {
 let railSig = '';
 let tabsSig = '';
 
-const railRow = (t: Track) => `
-  <div class="titem ${activeTab === t.id ? 'sel' : ''}" data-id="${t.id}">
+const ICON_ARCHIVE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/></svg>`;
+
+/** A finished row swaps its age for an archive button on hover; open rows have none. */
+const railRow = (t: Track, closed = false) => `
+  <div class="titem ${closed ? 'closed' : ''} ${activeTab === t.id ? 'sel' : ''}" data-id="${t.id}">
     <span class="dot ${dotOf(t)}"></span>
     <span class="tname">${esc(t.title)}</span>
     <span class="tago">${ago(t.lastActivityAt)}</span>
+    ${closed
+      ? `<button class="tarch" data-archive="${t.id}" title="archive — hide it from this list"
+                 aria-label="archive ${esc(t.title)}">${ICON_ARCHIVE}</button>`
+      : ''}
   </div>`;
 
 /**
@@ -286,17 +311,26 @@ function renderRail() {
   const needs = tracks.filter((t) => t.court === 'ON_ME').length;
 
   const sig = tracks.map((t) => `${t.id}/${t.title}/${dotOf(t)}/${ago(t.lastActivityAt)}`).join(',')
-    + `|${activeTab}|${doneOpen}|${closedTracks.map((t) => t.id).join(',')}`;
+    + `|${activeTab}|${doneOpen}|${closedTracks.map((t) => t.id).join(',')}|${archivedTracks.length}`;
   if (railSig === sig) return;
   railSig = sig;
 
+  // The archive lives behind one line at the foot of the done list: out of the
+  // way, but always where you would look for something you finished.
+  const archived = `
+    <button class="archlink" id="archivedopen" title="archived tracks — search and restore">
+      ${archivedTracks.length > 0 ? `archived (${archivedTracks.length})…` : 'view archived…'}
+    </button>`;
   const done = `
     <div class="donehead" id="donetoggle" title="finished tracks">
       <span class="caret">${doneOpen ? '⌄' : '›'}</span>
       <span>done</span>
       <span class="tago">${doneOpen ? closedTracks.length || '' : ''}</span>
     </div>
-    ${doneOpen ? closedTracks.map(railRow).join('') || '<div class="pad muted">nothing finished yet</div>' : ''}`;
+    ${doneOpen
+      ? (closedTracks.map((t) => railRow(t, true)).join('') || '<div class="pad muted">nothing finished yet</div>')
+        + archived
+      : ''}`;
 
   $('railbody').innerHTML = tracks.length === 0 && !doneOpen
     ? '<div class="empty">No tracks yet.<br><br>Press <b>+ track</b> to make one.</div>' + done
@@ -304,20 +338,142 @@ function renderRail() {
          <span>${tracks.length} open</span>
          ${needs > 0 ? `<span class="needs">${needs} need${needs === 1 ? 's' : ''} you</span>` : ''}
        </div>
-       ${tracks.map(railRow).join('')}
+       ${tracks.map((t) => railRow(t)).join('')}
        ${done}`;
 
   for (const el of document.querySelectorAll<HTMLElement>('.titem')) {
     el.onclick = () => openTrack(Number(el.dataset.id));
   }
+  for (const b of document.querySelectorAll<HTMLButtonElement>('[data-archive]')) {
+    b.onclick = (e) => {
+      // The button sits inside the row; without this the click also opens it.
+      e.stopPropagation();
+      void archiveFromRail(Number(b.dataset.archive), b);
+    };
+  }
   $('donetoggle').onclick = () => { void toggleDone(); };
+  const arch = document.getElementById('archivedopen');
+  if (arch) arch.onclick = () => openArchiveSheet();
 }
 
-/** Finished tracks are fetched on demand — see `tracks.closed` in the daemon. */
+/**
+ * Finished tracks are fetched on demand — see `tracks.closed` in the daemon.
+ * A failed fetch keeps what was there rather than blanking the section.
+ */
+async function loadDone() {
+  const [closed, archived] = await Promise.all([
+    window.omi.rpc('tracks.closed').catch(() => closedTracks),
+    window.omi.rpc('tracks.archived').catch(() => archivedTracks),
+  ]);
+  closedTracks = closed;
+  archivedTracks = archived;
+}
+
 async function toggleDone() {
   doneOpen = !doneOpen;
-  if (doneOpen) closedTracks = await window.omi.rpc('tracks.closed').catch(() => []);
+  if (doneOpen) await loadDone();
   renderRail();
+}
+
+/**
+ * Archiving hides a finished track without touching its status, so it can come
+ * back from the archive sheet exactly as it was. A track being archived is not
+ * one you are looking at any more, so its tab goes too.
+ */
+async function archiveFromRail(id: number, btn: HTMLButtonElement) {
+  btn.disabled = true;
+  try {
+    await window.omi.rpc('tracks.archive', { id });
+  } catch (err) {
+    btn.disabled = false;
+    btn.title = String((err as Error).message);
+    return;
+  }
+  closedTracks = closedTracks.filter((t) => t.id !== id);
+  if (openTabs.includes(id) || activeTab === id) closeTab(id);
+  else renderRail();
+  await refreshAll();
+}
+
+// ── tab strips ─────────────────────────────────────────────────────────────
+
+/**
+ * Both tab rows behave like IntelliJ's editor tabs: a single row with no
+ * scrollbar. A plain mouse wheel scrolls it sideways, the active tab is kept in
+ * view, a faded edge says there is more that way, and ▾ — shown only when
+ * something does not fit — lists every tab. Called after every rewrite of the
+ * row; the handlers are properties, so re-wiring replaces rather than stacks.
+ */
+const stripObservers = new Map<string, ResizeObserver>();
+
+function wireTabStrip(scroller: HTMLElement, more: HTMLButtonElement, itemSel: string) {
+  const sync = () => {
+    const max = scroller.scrollWidth - scroller.clientWidth;
+    more.hidden = max <= 1;
+    scroller.classList.toggle('fade-l', scroller.scrollLeft > 1);
+    scroller.classList.toggle('fade-r', scroller.scrollLeft < max - 1);
+  };
+  scroller.onwheel = (e) => {
+    if (scroller.scrollWidth <= scroller.clientWidth) return;
+    // A trackpad already scrolls sideways; only translate a vertical wheel.
+    if (Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
+    e.preventDefault();
+    scroller.scrollLeft += e.deltaY;
+  };
+  scroller.onscroll = sync;
+  more.onclick = (e) => {
+    e.stopPropagation();
+    toggleTabMenu(more, scroller, itemSel);
+  };
+  // The row gets narrower when the window or the rail does, not only when tabs
+  // change, so the ▾ has to follow its size too.
+  stripObservers.get(more.id)?.disconnect();
+  const ro = new ResizeObserver(sync);
+  ro.observe(scroller);
+  stripObservers.set(more.id, ro);
+
+  // Settle the ▾ first: showing it narrows the row, and scrolling the active tab
+  // into view before that would leave it half behind the edge.
+  sync();
+  scroller.querySelector<HTMLElement>(`${itemSel}.on`)
+    ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  sync();
+}
+
+function closeTabMenu() {
+  const menu = $('tabmenu');
+  if (menu.hidden) return;
+  menu.hidden = true;
+  document.querySelector('.tabmore.open')?.classList.remove('open');
+}
+
+function toggleTabMenu(anchor: HTMLElement, scroller: HTMLElement, itemSel: string) {
+  const menu = $('tabmenu');
+  if (!menu.hidden && menu.dataset.for === anchor.id) { closeTabMenu(); return; }
+  closeTabMenu();
+  const items = [...scroller.querySelectorAll<HTMLElement>(itemSel)];
+  menu.innerHTML = items.map((el, i) => {
+    const dot = el.querySelector('.dot')?.className ?? 'dot';
+    const label = el.querySelector('.tlabel, .sname')?.textContent ?? '';
+    return `<button class="tmi ${el.classList.contains('on') ? 'on' : ''}" data-i="${i}"
+                    title="${esc(label)}"><span class="${esc(dot)}"></span><span class="tml">${esc(label)}</span></button>`;
+  }).join('');
+  for (const b of menu.querySelectorAll<HTMLElement>('.tmi')) {
+    b.onclick = () => {
+      const el = items[Number(b.dataset.i)];
+      closeTabMenu();
+      if (!el) return;
+      el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      el.click();
+    };
+  }
+  // Hang it under the ▾, right-aligned to it, like IntelliJ's hidden-tabs list.
+  const r = anchor.getBoundingClientRect();
+  menu.style.top = `${r.bottom + 4}px`;
+  menu.style.right = `${Math.max(4, window.innerWidth - r.right)}px`;
+  menu.dataset.for = anchor.id;
+  menu.hidden = false;
+  anchor.classList.add('open');
 }
 
 function renderTabs() {
@@ -334,8 +490,9 @@ function renderTabs() {
     const t = tracks.find((x) => x.id === id);
     if (!t) return '';
     return `<div class="tab ${activeTab === id ? 'on' : ''}" data-id="${id}">
-      <span class="dot ${dotOf(t)}"></span>${esc(t.title)}<span class="x" data-close="${id}">×</span></div>`;
+      <span class="dot ${dotOf(t)}"></span><span class="tlabel" title="${esc(t.title)}">${esc(t.title)}</span><span class="x" data-close="${id}">×</span></div>`;
   }).join('');
+  wireTabStrip($('tabs'), $<HTMLButtonElement>('tabsmore'), '.tab');
 
   for (const el of document.querySelectorAll<HTMLElement>('.tab')) {
     el.onclick = (e) => {
@@ -387,7 +544,7 @@ const DETAIL_SKELETON = `
       <div id="scopebar"></div>
       <input id="paste" placeholder="paste a PR / Slack / Jira link, or PAY-123" />
       <div id="sidetop"></div>
-      <div class="shead">TIMELINE</div>
+      <div class="shead">NOTES</div>
       <input id="note" placeholder="add a note…" />
       <div id="timeline" class="timeline"></div>
     </div>
@@ -440,7 +597,9 @@ function buildDetail(id: number) {
   $<HTMLInputElement>('note').onkeydown = (e) => {
     if ((e as KeyboardEvent).key !== 'Enter') return;
     const el = e.target as HTMLInputElement;
-    void window.omi.rpc('tracks.addNote', { id, text: el.value })
+    const text = el.value.trim();
+    if (!text) return;
+    void window.omi.rpc('tracks.addNote', { id, text })
       .then(() => { el.value = ''; return refresh(); });
   };
 
@@ -529,6 +688,14 @@ function patchHead(t: Track) {
   folder.textContent = t.cwd ? shortPath(t.cwd) : 'choose a folder…';
 }
 
+/** Icons for the session strip's buttons; they take the button's text colour. */
+const ICON_PLUS = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+  stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>`;
+const ICON_LINK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`;
+
 /** One chip per session in the track, plus the buttons that add another. */
 function patchSessbar(t: Track, session: Ref | undefined) {
   const m = mounted as NonNullable<typeof mounted>;
@@ -542,7 +709,11 @@ function patchSessbar(t: Track, session: Ref | undefined) {
   if (m.sig.sess === sig) return;
   m.sig.sess = sig;
 
+  // The row is rebuilt below; keep where it was scrolled to, or every poll that
+  // changes a session's state would jump it back to the start.
+  const scrolled = document.getElementById('sesstabs')?.scrollLeft ?? 0;
   $('sessbar').innerHTML = `
+    <div id="sesstabs" class="tabscroll">
     ${list.map((r) => {
       const state = r.state ?? liveSession(r)?.state ?? '';
       // An empty session is disposable; one holding refs is not, because they
@@ -564,9 +735,20 @@ function patchSessbar(t: Track, session: Ref | undefined) {
           : ''}
       </div>`;
     }).join('')}
-    <button class="sadd" id="addsess" title="open another session in this track">${starting === t.id ? 'starting…' : '+ session'}</button>
-    <button class="sadd" id="attachsess" title="attach a session that is already running">attach…</button>
-    <button id="sidetoggle" class="sidetoggle" title="refs">refs ↔</button>`;
+    </div>
+    <button id="sessmore" class="tabmore" hidden title="all sessions in this track">▾</button>
+    <div class="sessacts">
+      ${starting === t.id
+        ? `<button class="sadd" id="addsess" disabled aria-busy="true"
+                   title="starting a session…" aria-label="starting a session…">${ICON_PLUS}</button>`
+        : `<button class="sadd" id="addsess"
+                   title="open another session in this track" aria-label="open another session in this track">${ICON_PLUS}</button>`}
+      <button class="sadd" id="attachsess"
+              title="attach a session that is already running" aria-label="attach a session that is already running">${ICON_LINK}</button>
+      <button id="sidetoggle" class="sidetoggle" title="refs">refs ↔</button>
+    </div>`;
+  $('sesstabs').scrollLeft = scrolled;
+  wireTabStrip($('sesstabs'), $<HTMLButtonElement>('sessmore'), '.sess');
 
   for (const el of document.querySelectorAll<HTMLElement>('.sess')) {
     el.onclick = (e) => {
@@ -698,7 +880,9 @@ function focusTerminal() {
 function mountTerminal(t: Track, session: Ref | undefined) {
   const m = mounted as NonNullable<typeof mounted>;
   const attachable = session ? isAttachable(session) : false;
-  const viewId = session && attachable ? `claude:${shortIdOf(sessionIdOf(session))}` : null;
+  // The job's own short id, which is what `claude attach` takes.
+  const shortId = session && attachable ? (liveSession(session)?.shortId as string) : null;
+  const viewId = shortId ? `claude:${shortId}` : null;
   const key = viewId ?? `none:${session?.externalId ?? ''}:${liveSession(session ?? { externalId: '' })?.kind ?? ''}`;
   if (m.viewId === key) return;
   m.viewId = key;
@@ -714,7 +898,7 @@ function mountTerminal(t: Track, session: Ref | undefined) {
     // Fit BEFORE opening: the pty is spawned with whatever cols/rows we pass,
     // and the default 80x24 is almost never what the pane is.
     fitTerm(v);
-    void openPty(shortIdOf(sessionIdOf(session)), viewId, t.cwd);
+    void openPty(shortId as string, viewId, t.cwd);
     // Switching session is a deliberate act, so put the cursor where the user
     // is now looking — unless they are mid-sentence in one of the fields, which
     // focusTerminal() checks for us.
@@ -725,12 +909,64 @@ function mountTerminal(t: Track, session: Ref | undefined) {
 
   if (session) {
     const live = liveSession(session);
+    if (live) {
+      wrap.innerHTML = `<div class="empty">
+        <b>${esc(session.label ?? '')}</b> is an ${esc(live.kind)} session.<br><br>
+        Only background sessions can be attached — an interactive one already belongs to a terminal you opened.
+        </div>`;
+      return;
+    }
+    // A stopped session is not a dead end. Resuming keeps its id, so the refs it
+    // holds stay put; starting over is the fallback when the transcript is gone,
+    // and it takes those refs along instead of leaving them on a corpse.
+    const holds = t.refs.filter((x) => x.kind !== 'claude_session' && x.sessionId === session.externalId).length;
     wrap.innerHTML = `<div class="empty">
-      <b>${esc(session.label ?? '')}</b> is ${live ? `an ${esc(live.kind)} session` : 'no longer running'}.<br><br>
-      ${live
-        ? 'Only background sessions can be attached — an interactive one already belongs to a terminal you opened.'
-        : 'Its transcript is kept, so it can be resumed.'}
+      <b>${esc(session.label ?? '')}</b> is no longer running.<br><br>
+      Its transcript is kept, so it can pick up where it left off.
+      <div class="deadacts">
+        <button class="wbtn go" id="resumesess">resume</button>
+        ${holds > 0
+          ? `<button class="wbtn" id="freshsess"
+                     title="for when it cannot be resumed">new session, keep ${holds} ref${holds === 1 ? '' : 's'}</button>`
+          : ''}
+      </div>
+      <div class="deaderr muted" id="deaderr"></div>
       </div>`;
+    const busy = (b: HTMLButtonElement, label: string) => {
+      for (const x of wrap.querySelectorAll<HTMLButtonElement>('.deadacts button')) x.disabled = true;
+      b.textContent = label;
+    };
+    const fail = (err: unknown) => {
+      // The view is keyed on the session, so it is not rebuilt on its own; put
+      // the buttons back so the user can try again or take the other way out.
+      m.viewId = null;
+      renderDetail();
+      const el = document.getElementById('deaderr');
+      if (el) el.textContent = (err as Error).message;
+    };
+    $<HTMLButtonElement>('resumesess').onclick = async (e) => {
+      busy(e.currentTarget as HTMLButtonElement, 'resuming…');
+      try {
+        const r = await window.omi.rpc('tracks.resumeSession', { id: t.id, session: session.externalId });
+        if (r?.session?.sessionId) activeSession[t.id] = `claude:${r.session.sessionId}`;
+        saveTabs();
+        await refresh();
+        focusTerminal();
+      } catch (err) { fail(err); }
+    };
+    const fresh = document.getElementById('freshsess') as HTMLButtonElement | null;
+    if (fresh) {
+      fresh.onclick = async () => {
+        busy(fresh, 'starting…');
+        try {
+          const r = await window.omi.rpc('tracks.startSession', { id: t.id, carryFrom: session.externalId });
+          if (r?.session?.sessionId) activeSession[t.id] = `claude:${r.session.sessionId}`;
+          saveTabs();
+          await refresh();
+          focusTerminal();
+        } catch (err) { fail(err); }
+      };
+    }
     return;
   }
 
@@ -741,14 +977,19 @@ function mountTerminal(t: Track, session: Ref | undefined) {
     </div>`;
 }
 
+/**
+ * Only the user's own notes. System events (links, renames, pins) are still
+ * recorded — they drive activity times and the "why" popover — but as a feed
+ * they were noise next to what the user actually wrote down.
+ */
 function patchTimeline(t: Track) {
-  void window.omi.rpc('tracks.timeline', { id: t.id }).then((rows: any[]) => {
+  void window.omi.rpc('tracks.notes', { id: t.id }).then((rows: any[]) => {
     const el = document.getElementById('timeline');
     const m = mounted;
     if (!el || !m || m.trackId !== t.id) return;
     const html = rows.map((r) => `
       <div class="ev"><span class="evt">${ago(r.occurred_at)}</span>
-      <span class="evb">${esc(r.title)}</span></div>`).join('') || '<div class="muted pad">nothing yet</div>';
+      <span class="evb">${esc(r.body ?? r.title)}</span></div>`).join('') || '<div class="muted pad">no notes yet</div>';
     if (m.sig.time === html) return;
     m.sig.time = html;
     el.innerHTML = html;
@@ -990,6 +1231,7 @@ let wizard: Wizard | null = null;
 function openWizard() {
   const recent = [...new Set(tracks.map((t) => t.cwd).filter((c): c is string => !!c))];
   attachSheet = null;
+  archiveSheet = null;
   wizard = { title: '', cwd: recent[0] ?? null, picked: new Set(), fresh: false, busy: null, focused: false };
   renderWizard();
 }
@@ -1009,8 +1251,8 @@ function renderWizard() {
     <form class="sheet" id="wiz">
       <div class="whead">NEW TRACK</div>
 
-      <label class="wlab">what is the question?</label>
-      <input id="wtitle" value="${esc(w.title)}" placeholder="a question works best…" />
+      <label class="wlab">what is the question? <span class="muted">— optional</span></label>
+      <input id="wtitle" value="${esc(w.title)}" placeholder="a question works best, but you can name it later…" />
 
       <label class="wlab">folder</label>
       <div class="wrow">
@@ -1097,13 +1339,21 @@ function renderWizard() {
 async function createFromWizard() {
   const w = wizard;
   if (!w) return;
-  const title = w.title.trim();
-  if (!title) return;
+  // The question is optional: a track is often opened to poke at a folder
+  // before there is a question worth writing down, and refusing to create one
+  // stops that. An unnamed track is named after its folder and can be renamed
+  // later; only a real question is recorded as the question.
+  const question = w.title.trim();
+  const title = question || w.cwd?.replace(/\/+$/, '').split('/').pop() || 'untitled';
 
   w.busy = 'creating…';
   renderWizard();
 
-  const track = await window.omi.rpc('tracks.create', { title, question: title, cwd: w.cwd });
+  const track = await window.omi.rpc('tracks.create', {
+    title,
+    question: question || null,
+    cwd: w.cwd,
+  });
   for (const sessionId of w.picked) {
     await window.omi.rpc('tracks.attachSession', { id: track.id, sessionId }).catch(() => {});
   }
@@ -1139,6 +1389,7 @@ async function createFromWizard() {
 let attachSheet: { trackId: number; picked: Set<string>; all: boolean; busy: boolean } | null = null;
 
 function openAttachSheet(trackId: number) {
+  archiveSheet = null;
   attachSheet = { trackId, picked: new Set(), all: false, busy: false };
   renderModal();
 }
@@ -1149,9 +1400,9 @@ function renderAttachSheet() {
   const t = tracks.find((x) => x.id === a.trackId);
   if (!t) { closeModal(); return; }
 
-  const linked = new Set(sessionRefsOf(t).map((r) => sessionIdOf(r)));
+  const linked = new Set(sessionRefsOf(t).map((r) => liveSession(r)).filter(Boolean));
   const inFolder = sessions.filter((s) => !t.cwd || a.all || s.cwd === t.cwd);
-  const free = inFolder.filter((s) => !linked.has(s.sessionId));
+  const free = inFolder.filter((s) => !linked.has(s));
   const hiddenByFolder = sessions.length - inFolder.length;
 
   $('modal').hidden = false;
@@ -1207,15 +1458,136 @@ function renderAttachSheet() {
   };
 }
 
-/** One host element, one of the two sheets. Escape closes whichever is up. */
+// ── archived tracks ─────────────────────────────────────────────────────────
+
+/**
+ * The archive is a sheet, not a rail section: archived work is out of the way
+ * on purpose, and you only come here looking for one thing — hence the search.
+ * `rows` is null until the first fetch lands.
+ */
+let archiveSheet: { query: string; rows: Track[] | null; error: string | null } | null = null;
+
+function openArchiveSheet() {
+  wizard = null;
+  attachSheet = null;
+  archiveSheet = { query: '', rows: null, error: null };
+  renderModal();
+  void window.omi.rpc('tracks.archived')
+    .then((rows: Track[]) => {
+      archivedTracks = rows;
+      if (!archiveSheet) return;
+      archiveSheet.rows = rows;
+      patchArchiveList();
+    })
+    .catch((err) => {
+      if (!archiveSheet) return;
+      archiveSheet.rows = [];
+      archiveSheet.error = String(err.message);
+      patchArchiveList();
+    });
+}
+
+/**
+ * Built once per open, then only the list is patched. Rebuilding the sheet on
+ * every keystroke would replace the search box under the caret.
+ */
+function renderArchiveSheet() {
+  const a = archiveSheet;
+  if (!a) return;
+  const host = $('modal');
+  host.hidden = false;
+  if (document.getElementById('arch')) { patchArchiveList(); return; }
+
+  host.innerHTML = `
+    <div class="sheet" id="arch" role="dialog" aria-label="archived tracks">
+      <div class="whead">ARCHIVED TRACKS</div>
+      <input id="asearch" value="${esc(a.query)}" placeholder="search title, question or folder…"
+             aria-label="search archived tracks" autocomplete="off" spellcheck="false" />
+      <div class="wsess alist" id="alist"></div>
+      <div class="wacts">
+        <button type="button" id="aclose" class="wbtn">close</button>
+      </div>
+    </div>`;
+
+  const search = $<HTMLInputElement>('asearch');
+  search.oninput = () => {
+    if (!archiveSheet) return;
+    archiveSheet.query = search.value;
+    patchArchiveList();
+  };
+  $('aclose').onclick = () => closeModal();
+  patchArchiveList();
+  search.focus();
+}
+
+const archiveRow = (t: Track) => {
+  const meta = [
+    t.cwd ? shortPath(t.cwd) : 'no folder',
+    t.lifecycle,
+    t.archivedAt ? `archived ${ago(t.archivedAt)} ago` : '',
+  ].filter(Boolean).join(' · ');
+  return `<div class="arow">
+    <div class="amain">
+      <div class="wname" title="${esc(t.question ?? t.title)}">${esc(t.title)}</div>
+      <div class="ameta" title="${esc(t.cwd ?? '')}">${esc(meta)}</div>
+    </div>
+    <button type="button" class="wbtn" data-restore="${t.id}" aria-label="restore ${esc(t.title)}">restore</button>
+  </div>`;
+};
+
+/** Case-insensitive across title, question and folder: whatever you remember it by. */
+function patchArchiveList() {
+  const a = archiveSheet;
+  const list = document.getElementById('alist');
+  if (!a || !list) return;
+  const q = a.query.trim().toLowerCase();
+  const rows = (a.rows ?? []).filter((t) =>
+    !q || [t.title, t.question, t.cwd].some((s) => !!s && s.toLowerCase().includes(q)));
+
+  list.innerHTML = a.rows === null
+    ? '<div class="muted pad">loading…</div>'
+    : a.error
+      ? `<div class="muted pad">could not load the archive: ${esc(a.error)}</div>`
+      : a.rows.length === 0
+        ? '<div class="muted pad">no archived tracks</div>'
+        : rows.length === 0
+          ? `<div class="muted pad">no archived track matches “${esc(a.query.trim())}”</div>`
+          : rows.map(archiveRow).join('');
+
+  for (const b of list.querySelectorAll<HTMLButtonElement>('[data-restore]')) {
+    b.onclick = () => { void restoreArchived(Number(b.dataset.restore), b); };
+  }
+}
+
+/** Back into the done list, with the status it was archived with. */
+async function restoreArchived(id: number, btn: HTMLButtonElement) {
+  btn.disabled = true;
+  try {
+    await window.omi.rpc('tracks.restore', { id });
+  } catch (err) {
+    btn.disabled = false;
+    btn.title = String((err as Error).message);
+    return;
+  }
+  if (archiveSheet?.rows) archiveSheet.rows = archiveSheet.rows.filter((t) => t.id !== id);
+  archivedTracks = archivedTracks.filter((t) => t.id !== id);
+  patchArchiveList();
+  // The button that had focus is gone; keep the keyboard in the sheet.
+  document.getElementById('asearch')?.focus();
+  await refreshAll();
+}
+
+/** One host element, one sheet at a time. Escape closes whichever is up. */
 function renderModal() {
   if (wizard) renderWizard();
   else if (attachSheet) renderAttachSheet();
+  else if (archiveSheet) renderArchiveSheet();
   else closeModal();
 }
 function closeModal() {
   wizard = null;
   attachSheet = null;
+  archiveSheet = null;
   $('modal').hidden = true;
   $('modal').innerHTML = '';
   focusTerminal();
@@ -1262,7 +1634,7 @@ function renderAll() { renderRail(); renderTabs(); renderDetail(); }
 
 /** Both halves of the binary: the open list, and the done section if it is up. */
 async function refreshAll() {
-  if (doneOpen) closedTracks = await window.omi.rpc('tracks.closed').catch(() => closedTracks);
+  if (doneOpen) await loadDone();
   return refresh();
 }
 
@@ -1285,11 +1657,21 @@ async function boot() {
   await window.omi.welcome();
 
   $('new').onclick = () => openWizard();
+  // The tab list closes on any click outside it, like any menu would.
+  window.addEventListener('mousedown', (e) => {
+    const t = e.target as HTMLElement;
+    // The ▾ toggles the menu itself on click; closing it here first would
+    // make that click open it again.
+    if (!$('tabmenu').contains(t) && !t.closest('.tabmore')) closeTabMenu();
+  }, true);
+  window.addEventListener('blur', closeTabMenu);
+  window.addEventListener('resize', closeTabMenu);
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     // Innermost first: the picker can sit on top of the new-track sheet.
     if (picker) { e.stopPropagation(); closePicker(null); return; }
-    if (wizard || attachSheet) { closeModal(); return; }
+    if (!$('tabmenu').hidden) { closeTabMenu(); return; }
+    if (wizard || attachSheet || archiveSheet) { closeModal(); return; }
     const side = document.getElementById('side');
     if (side?.classList.contains('open')) {
       side.classList.remove('open');

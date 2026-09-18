@@ -53,6 +53,17 @@ export function shortIdOf(sessionId: string): string {
   return sessionId.replace(/-/g, '').slice(0, 8);
 }
 
+/**
+ * Whether a listed session is the one we stored as `sessionId`. The UUID alone
+ * is not enough: a background session that moves into a worktree carries on
+ * under a new transcript, so `claude agents` reports a different UUID for the
+ * same job. The job's short id does not change — it is the prefix of the UUID
+ * it was launched with — so it is the key that survives.
+ */
+export function isSameSession(s: NormalizedSession, sessionId: string): boolean {
+  return s.sessionId === sessionId || (s.kind === 'background' && s.shortId === shortIdOf(sessionId));
+}
+
 export function normalizeRow(row: AgentRow): NormalizedSession {
   const kind = row.kind === 'background' ? 'background' : 'interactive';
   const raw = (kind === 'background' ? row.state : row.status) ?? null;

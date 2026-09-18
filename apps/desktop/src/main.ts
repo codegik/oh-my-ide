@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -72,6 +72,8 @@ class DaemonClient {
   private resolveWelcome!: (v: unknown) => void;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private closed = false;
+  /** One restart per skew, so a daemon we cannot refresh never becomes a loop. */
+  private replacedStaleDaemon = false;
 
   constructor() {
     this.armWelcome();
@@ -125,6 +127,7 @@ class DaemonClient {
 
   private onControl(msg: Record<string, unknown>): void {
     if (msg.t === 'welcome') {
+      if (this.restartIfStale(msg)) return;
       const reconnected = this.welcome !== null;
       this.welcome = msg;
       this.resolveWelcome(msg);
@@ -149,6 +152,38 @@ class DaemonClient {
     this.pending.delete(id);
     if (msg.t === 'result') p.resolve(msg.data);
     else p.reject(new Error(String(msg.message ?? 'rpc failed')));
+  }
+
+  /**
+   * A daemon started before the last build is running old code: it will answer
+   * some calls and reject others with `no such method`, which reads like a bug
+   * in whatever the user just clicked. Comparing the bundle it loaded against
+   * the one on disk turns that into a restart nobody has to think about —
+   * Claude sessions live outside the daemon, so they ride it out untouched.
+   */
+  private restartIfStale(welcome: Record<string, unknown>): boolean {
+    if (this.replacedStaleDaemon) return false;
+    const entry = welcome.entry;
+    const buildId = welcome.buildId;
+    // An older daemon reports neither, and one launched from somewhere else is
+    // not ours to compare against; leave both alone.
+    if (typeof entry !== 'string' || typeof buildId !== 'string') return false;
+    if (path.resolve(entry) !== path.resolve(DAEMON_ENTRY)) return false;
+    let onDisk: string;
+    try {
+      const st = fs.statSync(DAEMON_ENTRY);
+      onDisk = `${Math.round(st.mtimeMs)}-${st.size}`;
+    } catch {
+      return false;
+    }
+    if (onDisk === buildId) return false;
+
+    this.replacedStaleDaemon = true;
+    process.stderr.write('[desktop] daemon is running a stale build; restarting it\n');
+    // Fire and forget: the daemon exits, `close` fires, and the usual reconnect
+    // spawns the current build and tells the renderer to re-attach its terminals.
+    this.send({ t: 'rpc', id: this.nextId++, method: 'daemon.shutdown' });
+    return true;
   }
 
   private send(msg: unknown): void {
@@ -256,7 +291,36 @@ async function listDir(raw: string): Promise<{ home: string; path: string; dirs:
 
 const client = new DaemonClient();
 
+/**
+ * The desktop's own text size, in CSS px, or null where there is no setting to
+ * read (not GNOME-ish, no gsettings) — the stylesheet's defaults cover that.
+ *
+ * Read once at startup: the renderer anchors every size to this, so the text you
+ * read most in the app is the size you chose for the rest of the desktop.
+ */
+function osFontPx(key: 'font-name' | 'monospace-font-name'): number | null {
+  if (process.platform !== 'linux') return null;
+  const get = (k: string) =>
+    execFileSync('gsettings', ['get', 'org.gnome.desktop.interface', k], {
+      encoding: 'utf8',
+      timeout: 1000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  try {
+    // e.g. 'Adwaita Sans 11' — the size is always the last token, in points.
+    const pt = Number(/(\d+(?:\.\d+)?)'?$/.exec(get(key))?.[1]);
+    if (!Number.isFinite(pt) || pt <= 0) return null;
+    const scaling = Number(get('text-scaling-factor')) || 1;
+    const px = (pt * 96) / 72 * scaling;
+    return px >= 8 && px <= 40 ? Math.round(px * 100) / 100 : null;
+  } catch {
+    return null;
+  }
+}
+
 function createWindow(): void {
+  const uiPx = osFontPx('font-name');
+  const monoPx = osFontPx('monospace-font-name');
   const win = new BrowserWindow({
     width: 1400,
     height: 880,
@@ -267,6 +331,11 @@ function createWindow(): void {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      // The only way to hand a value to a sandboxed preload before first paint.
+      additionalArguments: [
+        ...(uiPx ? [`--omi-ui-font-px=${uiPx}`] : []),
+        ...(monoPx ? [`--omi-mono-font-px=${monoPx}`] : []),
+      ],
     },
   });
   void win.loadFile(RENDERER_HTML);

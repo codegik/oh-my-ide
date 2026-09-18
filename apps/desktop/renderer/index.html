@@ -8,26 +8,59 @@
   :root {
     --bg:#0f1115; --panel:#161922; --line:#232838; --text:#e6e9f0; --dim:#8b93a7;
     --ON_ME:#ff7a59; --ON_CLAUDE:#4ea1ff; --ON_THEM:#c08cff; --ON_SYSTEM:#ffc857; --PARKED:#5b6478;
-    /* Sizes are relative to this one, so the whole UI scales from here. The
-       terminal font is set in the renderer, next to the Terminal options. */
-    --fs:15px; --fs-s:13px; --fs-xs:12px;
+    /* Every size derives from --fs-s, the size most of the UI is read at. The
+       renderer sets it to the desktop's own font size when there is one; 13px
+       is only the fallback. The terminal font is set next to the Terminal
+       options in the renderer. */
+    --fs-s:13px;
+    --fs:calc(var(--fs-s) * 15 / 13); --fs-xs:calc(var(--fs-s) * 12 / 13);
+    --fs-h:calc(var(--fs-s) * 17 / 13);
     /* The rail column. The header's left cell matches it so the tab bar starts
        on the same vertical line the track list draws below. */
     --rail:300px;
   }
   * { box-sizing:border-box; }
+  /* Dark, thin scrollbars everywhere, in the IntelliJ spirit: the native ones
+     are white slabs with arrow buttons, the loudest thing on a dark screen. */
+  :root { color-scheme:dark; }
+  * { scrollbar-width:thin; scrollbar-color:#343a4b transparent; }
   body { margin:0; background:var(--bg); color:var(--text); height:100vh; overflow:hidden;
          font:var(--fs)/1.55 "JetBrains Mono","Fira Code",ui-monospace,monospace;
          display:flex; flex-direction:column; }
   header { display:flex; align-items:stretch; height:36px;
            border-bottom:1px solid var(--line); background:var(--panel); flex:none; }
-  #tabs { display:flex; align-items:flex-end; gap:4px; flex:1; min-width:0;
-          padding:0 8px; overflow-x:auto; overflow-y:hidden; }
-  .tab { display:flex; align-items:center; gap:7px; padding:5px 10px; border-radius:5px 5px 0 0;
+  #tabs { display:flex; align-items:flex-end; gap:4px; flex:1; min-width:0; padding:0 8px; }
+  .tab { display:flex; flex:none; align-items:center; gap:7px; padding:5px 10px; border-radius:5px 5px 0 0;
          background:#1a1e29; color:var(--dim); cursor:pointer; white-space:nowrap; font-size:var(--fs-s); }
   .tab.on { background:var(--bg); color:var(--text); box-shadow:inset 0 -2px 0 var(--ON_ME); }
   .tab .x { color:#5b6478; padding-left:3px; }
   .tab .x:hover { color:#ff5555; }
+  .tlabel, .sname { max-width:32ch; overflow:hidden; text-overflow:ellipsis; }
+
+  /* Tab strips, IntelliJ-style: one row, never a scrollbar. The wheel scrolls
+     it sideways, a faded edge says there is more that way, and ▾ lists every
+     tab when some do not fit. See wireTabStrip in the renderer. */
+  /* scroll-padding keeps a tab scrolled into view clear of the faded edge. */
+  .tabscroll { overflow-x:auto; overflow-y:hidden; scrollbar-width:none; min-width:0;
+               scroll-padding-inline:28px; }
+  .tabscroll::-webkit-scrollbar { display:none; }
+  .tabscroll.fade-l { mask-image:linear-gradient(to right, transparent, #000 28px); }
+  .tabscroll.fade-r { mask-image:linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+  .tabscroll.fade-l.fade-r {
+    mask-image:linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+  .tabmore { flex:none; align-self:center; background:transparent; color:var(--dim);
+             border:1px solid transparent; border-radius:5px; padding:2px 7px; margin-right:4px;
+             cursor:pointer; font:inherit; font-size:var(--fs-s); line-height:1.3; }
+  .tabmore:hover, .tabmore.open { color:var(--text); background:#1d2230; border-color:var(--line); }
+  #tabmenu { position:fixed; z-index:60; min-width:220px; max-width:min(440px, 90vw);
+             max-height:60vh; overflow-y:auto; background:var(--panel); border:1px solid var(--line);
+             border-radius:7px; padding:4px; box-shadow:0 12px 40px rgba(0,0,0,.6); }
+  .tmi { display:flex; align-items:center; gap:8px; width:100%; padding:5px 9px; border:none;
+         border-radius:5px; background:transparent; color:var(--dim); cursor:pointer;
+         font:inherit; font-size:var(--fs-s); text-align:left; }
+  .tmi:hover { background:#1d2230; color:var(--text); }
+  .tmi.on { color:var(--text); font-weight:600; }
+  .tml { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   main { flex:1; display:grid; grid-template-columns:var(--rail) minmax(0,1fr); min-height:0; }
   #rail { border-right:1px solid var(--line); overflow:auto; padding-bottom:20px; }
   .railtop { display:flex; align-items:center; width:var(--rail); flex:none;
@@ -52,6 +85,21 @@
   .titem { display:flex; align-items:center; gap:8px; padding:6px 12px; cursor:pointer; }
   .titem:hover { background:#1a1e29; }
   .titem.sel { background:#1d2230; }
+  /* A finished row trades its age for an archive button on hover, so the two
+     never fight for the rail's narrow width. */
+  .tarch { display:none; align-items:center; justify-content:center; flex:none;
+           width:calc(1lh + 2px); height:calc(1lh + 2px); padding:0; background:transparent;
+           color:var(--dim); border:1px solid transparent; border-radius:4px; cursor:pointer;
+           font:inherit; font-size:var(--fs-xs); }
+  .tarch svg { display:block; width:1.1em; height:1.1em; }
+  .titem.closed:hover .tago { display:none; }
+  .titem.closed:hover .tarch, .tarch:focus-visible { display:inline-flex; }
+  .tarch:hover { color:var(--text); background:#232838; border-color:var(--line); }
+  .tarch:disabled { opacity:.45; cursor:progress; }
+  .archlink { display:block; width:100%; padding:6px 12px; background:none; border:none;
+              color:var(--dim); font:inherit; font-size:var(--fs-xs); letter-spacing:.4px;
+              text-align:left; cursor:pointer; }
+  .archlink:hover { color:var(--text); }
   .tname { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--fs-s); }
   .tago { color:var(--dim); font-size:var(--fs-xs); }
   .dot { width:8px; height:8px; border-radius:50%; flex:none; background:var(--PARKED); }
@@ -60,7 +108,7 @@
   #detail { display:flex; flex-direction:column; min-width:0; min-height:0; }
   .thead { padding:9px 14px; border-bottom:1px solid var(--line); }
   .trow { display:flex; align-items:baseline; gap:12px; min-width:0; }
-  .thead h2 { margin:0; font-size:17px; font-weight:600; flex:none;
+  .thead h2 { margin:0; font-size:var(--fs-h); font-weight:600; flex:none;
               overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:55%; }
   .court { font-size:var(--fs-xs); letter-spacing:.7px; padding:2px 9px; border-radius:999px;
            cursor:pointer; background:#1d2230; }
@@ -79,18 +127,25 @@
   .left { display:flex; flex-direction:column; min-width:0; min-height:0; border-right:1px solid var(--line); }
 
   /* session strip: one chip per conversation in the track */
-  .sessbar { display:flex; align-items:center; gap:5px; padding:6px 8px; overflow-x:auto;
+  .sessbar { display:flex; align-items:center; gap:5px; padding:6px 8px;
              border-bottom:1px solid var(--line); flex:none; }
-  .sess { display:flex; align-items:center; gap:7px; padding:4px 9px; border-radius:5px;
+  #sesstabs { display:flex; align-items:center; gap:5px; flex:0 1 auto; }
+  .sessacts { display:flex; align-items:center; gap:5px; flex:1 0 auto; }
+  .sess { display:flex; flex:none; align-items:center; gap:7px; padding:4px 9px; border-radius:5px;
           background:#1a1e29; color:var(--dim); cursor:pointer; white-space:nowrap; font-size:var(--fs-s); }
   .sess:hover { color:var(--text); }
   .sess.on { background:#232838; color:var(--text); box-shadow:inset 0 -2px 0 var(--ON_CLAUDE); }
   .sstate { color:var(--dim); font-size:var(--fs-xs); }
   .sess .x { color:#5b6478; font-size:var(--fs-s); padding-left:2px; }
   .sess .x:hover { color:#ff5555; }
-  .sadd { background:transparent; color:var(--dim); border:1px dashed var(--line); border-radius:5px;
-          padding:4px 9px; cursor:pointer; font:inherit; font-size:var(--fs-s); white-space:nowrap; }
-  .sadd:hover { color:var(--text); border-color:var(--dim); }
+  /* icon-only squares, as tall as a chip: one line plus its 4px padding */
+  .sadd { display:inline-flex; align-items:center; justify-content:center; flex:none;
+          box-sizing:border-box; width:calc(1lh + 8px); height:calc(1lh + 8px); padding:0;
+          background:transparent; color:var(--dim); border:1px dashed var(--line); border-radius:5px;
+          cursor:pointer; font:inherit; font-size:var(--fs-s); }
+  .sadd svg { display:block; width:1em; height:1em; }
+  .sadd:hover:not(:disabled) { color:var(--text); border-color:var(--dim); }
+  .sadd:disabled { opacity:.45; cursor:progress; }
 
   .termwrap { flex:1; min-height:0; background:#0b0d12; padding:6px; }
   .termhost { width:100%; height:100%; }
@@ -119,11 +174,13 @@
   .timeline { padding:0 12px; }
   .ev { display:flex; gap:8px; font-size:var(--fs-s); padding:2px 0; }
   .evt { color:var(--dim); min-width:34px; font-size:var(--fs-xs); }
-  .evb { flex:1; color:#c9cfdd; }
+  .evb { flex:1; min-width:0; color:#c9cfdd; overflow-wrap:anywhere; }
   .muted { color:var(--dim); } .pad { padding:4px 12px; font-size:var(--fs-s); }
+  .deadacts { display:flex; gap:8px; justify-content:center; margin-top:16px; }
+  .deaderr { margin-top:10px; font-size:var(--fs-xs); }
   .empty { color:var(--dim); padding:40px 22px; text-align:center; font-size:var(--fs-s); }
 
-  /* sheets: new track, attach a session */
+  /* sheets: new track, attach a session, archived tracks */
   #modal { position:fixed; inset:0; z-index:80; background:rgba(6,8,12,.66);
            display:flex; align-items:flex-start; justify-content:center; padding-top:8vh; }
   #modal[hidden] { display:none; }
@@ -157,6 +214,14 @@
   .wbtn:disabled { opacity:.6; cursor:default; }
   .wlink { display:block; margin-top:8px; background:none; border:none; padding:0; cursor:pointer;
            color:var(--ON_CLAUDE); font:inherit; font-size:var(--fs-xs); text-align:left; }
+  /* archive sheet: the search stays put while the list under it scrolls */
+  .alist { margin-top:10px; max-height:52vh; overflow:auto; }
+  .arow { display:flex; align-items:center; gap:10px; padding:6px 7px; border-radius:5px; }
+  .arow:hover { background:#161922; }
+  .amain { flex:1; min-width:0; }
+  .amain .wname { display:block; font-size:var(--fs-s); }
+  .ameta { font-size:var(--fs-xs); color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .arow .wbtn { flex:none; padding:3px 11px; font-size:var(--fs-xs); }
 
   /* folder picker: a box that completes as you type, floated under whatever asked */
   #fpick { position:fixed; z-index:90; background:var(--panel); border:1px solid var(--line);
@@ -224,7 +289,8 @@
 <body>
   <header>
     <div class="railtop"><button id="new">+ track</button></div>
-    <div id="tabs"></div>
+    <div id="tabs" class="tabscroll"></div>
+    <button id="tabsmore" class="tabmore" hidden title="all open tracks">▾</button>
   </header>
   <main>
     <div id="rail">
@@ -233,6 +299,7 @@
     <div id="detail"></div>
   </main>
   <div id="why" hidden></div>
+  <div id="tabmenu" hidden></div>
   <div id="modal" hidden></div>
   <div id="fpick" hidden></div>
   <script src="./bundle.js"></script>
