@@ -555,7 +555,7 @@ function renderTabs() {
     openTabs
       .map((id) => {
         const t = tracks.find((x) => x.id === id);
-        return `${id}/${t?.title ?? ''}/${t ? dotOf(t) : ''}`;
+        return `${id}/${t?.title ?? ''}/${t?.question ?? ''}/${t ? dotOf(t) : ''}`;
       })
       .join(',') + `|${activeTab}`;
   if (tabsSig === sig) return;
@@ -566,7 +566,7 @@ function renderTabs() {
       const t = tracks.find((x) => x.id === id);
       if (!t) return '';
       return `<div class="tab ${activeTab === id ? 'on' : ''}" data-id="${id}">
-      <span class="dot ${dotOf(t)}"></span><span class="tlabel" title="${esc(t.title)}">${esc(t.title)}</span><span class="x" data-close="${id}">×</span></div>`;
+      <span class="dot ${dotOf(t)}"></span><span class="tlabel" title="${esc(t.question ?? t.title)}">${esc(t.title)}</span><span class="x" data-close="${id}">×</span></div>`;
     })
     .join('');
   wireTabStrip($('tabs'), $<HTMLButtonElement>('tabsmore'), '.tab');
@@ -609,7 +609,6 @@ const trackById = (id: number) =>
 const DETAIL_SKELETON = `
   <div class="thead">
     <div class="trow">
-      <h2 id="dtitle"></h2>
       <span class="folder" id="folder"></span>
       <span class="court" id="whybtn" title="why?"></span>
       <button class="fin" id="finish"></button>
@@ -625,7 +624,7 @@ const DETAIL_SKELETON = `
       <div id="scopebar"></div>
       <input id="paste" placeholder="paste a PR / Slack / Jira link, or PAY-123" />
       <div id="sidetop"></div>
-      <div class="shead">NOTES</div>
+      <div class="shead snotes">NOTES</div>
       <input id="note" placeholder="add a note…" />
       <div id="timeline" class="timeline"></div>
     </div>
@@ -751,19 +750,15 @@ function buildDetail(id: number) {
 }
 
 /**
- * Title and folder, on one line. The question and the next action are still on
- * the track, they just do not earn four rows above the terminal — the question
- * rides along as the title's tooltip.
+ * Folder, court and finish, on one line. No title: the active tab right above
+ * already names the track, and the rail names it again. The question rides
+ * along as the tab's tooltip instead.
  */
 function patchHead(t: Track) {
   const m = mounted as NonNullable<typeof mounted>;
-  const sig = `${t.title}|${t.question}|${t.court}|${t.lifecycle}|${t.cwd}|${sessionRefsOf(t).length > 0}`;
+  const sig = `${t.court}|${t.lifecycle}|${t.cwd}|${sessionRefsOf(t).length > 0}`;
   if (m.sig.head === sig) return;
   m.sig.head = sig;
-
-  const title = $('dtitle');
-  title.textContent = t.title;
-  title.title = t.question ?? t.title;
 
   const court = $('whybtn');
   court.className = `court ${t.court}`;
@@ -954,15 +949,13 @@ function patchSide(t: Track, session: Ref | undefined) {
       <span class="rk">${esc(r.kind.replace('_', ' '))}</span>
       <span class="rl">${esc(r.label ?? r.externalId)}</span>
       ${r.state ? `<span class="rs">${esc(r.state)}</span>` : ''}
-      ${r.url ? `<a class="go" data-url="${esc(r.url)}">↗</a>` : ''}
+      ${r.url ? `<a class="go" data-url="${esc(r.url)}" title="open link">↗</a>` : ''}
       <a class="rm" data-ref="${r.id}" title="unlink">×</a>
     </div>`;
 
-  // The heading names the scope, and the box you type into sits above the list
-  // it adds to, so what you add appears under your cursor.
-  $('scopebar').innerHTML = session
-    ? `<div class="shead">REFS · <b>${esc(session.label ?? shortIdOf(sessionIdOf(session)))}</b></div>`
-    : '<div class="shead">REFS</div>';
+  // The box you type into sits above the list it adds to, so what you add
+  // appears under your cursor. The session is already named in the tab bar.
+  $('scopebar').innerHTML = '<div class="shead">REFS</div>';
 
   $('sidetop').innerHTML = `
     <div id="refs">

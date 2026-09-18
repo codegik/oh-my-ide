@@ -331,6 +331,7 @@ function createWindow(): void {
     title: 'oh-my-ide',
     // X11 and taskbars read this. Wayland ignores it and looks the icon up via the
     // .desktop file named by the app id (see `desktopName`, `./start.sh install`).
+    // macOS ignores it too; see app.dock.setIcon in whenReady.
     icon: ICON,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -348,6 +349,10 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  // macOS ignores the window `icon`: the Dock and Cmd+Tab show the bundle's
+  // icon, which unpackaged is Electron.app's. This swaps in ours at runtime.
+  if (process.platform === 'darwin') app.dock?.setIcon(ICON);
+
   ipcMain.handle(
     'omi:rpc',
     guard((_e, method: string, params?: unknown) => client.rpc(method, params)),
