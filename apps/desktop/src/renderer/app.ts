@@ -123,6 +123,16 @@ let activeTab: number | null = null;
 let activeSession: Record<number, string> = {};
 /** Guards the one slow click in the UI: starting a session takes a moment. */
 let starting: number | null = null;
+/** When `starting` was set, for the seconds its pane counts up. */
+let startingSince = 0;
+/**
+ * Why a track's last new session did not start. It stays on screen, where the
+ * session would have been, until the user retries, dismisses it or picks
+ * another session — a tooltip on the + button is not somewhere anyone looks.
+ */
+const startFailed = new Map<number, string>();
+/** A session being started, or one that failed to, is what the track shows. */
+const pendingStart = (t: Track) => starting === t.id || startFailed.has(t.id);
 
 /**
  * Open tabs survive a restart. Closing the window should not cost you the set of
@@ -871,7 +881,8 @@ function patchSessbar(t: Track, session: Ref | undefined) {
         ).length;
         return `${r.externalId}:${r.label}:${r.state ?? liveSession(r)?.state ?? ''}:${held}`;
       })
-      .join(',') + `|${session?.externalId ?? ''}|${starting === t.id}`;
+      .join(',') +
+    `|${session?.externalId ?? ''}|${starting === t.id}|${startFailed.get(t.id) ?? ''}`;
   if (m.sig.sess === sig) return;
   m.sig.sess = sig;
 
@@ -907,6 +918,18 @@ function patchSessbar(t: Track, session: Ref | undefined) {
       </div>`;
       })
       .join('')}
+    ${
+      // The session being started has a chip from the moment it is asked for, so
+      // the click visibly did something before Claude answers.
+      starting === t.id
+        ? `<div class="sess on pending" title="starting a new session…">
+             <span class="spin"></span><span class="sname">starting…</span></div>`
+        : startFailed.has(t.id)
+          ? `<div class="sess on pending" title="${esc(startFailed.get(t.id) ?? '')}">
+               <span class="dot ON_ME"></span><span class="sname">did not start</span>
+               <span class="x" id="dismissstart" title="dismiss (Ctrl+W)">×</span></div>`
+          : ''
+    }
     </div>
     <button id="sessmore" class="tabmore" hidden title="all sessions in this track">▾</button>
     <div class="sessacts">
@@ -943,9 +966,18 @@ function patchSessbar(t: Track, session: Ref | undefined) {
   };
   $('attachsess').onclick = () => openAttachSheet(t.id);
   $('addsess').onclick = () => void startSession(t.id);
+  const dismiss = document.getElementById('dismissstart');
+  if (dismiss) dismiss.onclick = () => dismissFailedStart(t.id);
+}
+
+function dismissFailedStart(trackId: number) {
+  startFailed.delete(trackId);
+  renderDetail();
+  focusTerminal();
 }
 
 function selectSession(t: Track, externalId: string) {
+  startFailed.delete(t.id);
   activeSession[t.id] = externalId;
   saveTabs();
   renderDetail();
@@ -1001,18 +1033,33 @@ async function startSession(trackId: number) {
     if (!cur?.cwd) return;
   }
   starting = trackId;
+  startingSince = Date.now();
+  startFailed.delete(trackId);
   renderDetail();
+  const clock = setInterval(tickStartClock, 1000);
   try {
     const r = await window.omi.rpc('tracks.startSession', { id: trackId });
     if (r?.session?.sessionId) activeSession[trackId] = `claude:${r.session.sessionId}`;
     saveTabs();
+    // Still "starting" until the listing has it: until then there is nothing to
+    // attach to, and the pane would say the session is not running.
+    await refresh().catch(() => {});
   } catch (err) {
-    $('addsess').title = String((err as Error).message);
+    startFailed.set(trackId, String((err as Error).message));
   } finally {
     starting = null;
+    clearInterval(clock);
   }
-  await refresh();
+  renderDetail();
   focusTerminal();
+}
+
+/** Counts up once the wait is long enough to wonder about; silent before that. */
+function tickStartClock() {
+  const el = document.getElementById('startclock');
+  if (!el) return;
+  const s = Math.floor((Date.now() - startingSince) / 1000);
+  el.textContent = s < 3 ? '' : s < 15 ? `${s}s` : `${s}s — taking longer than usual`;
 }
 
 /** A short-lived note under an element, for feedback a tooltip would hide. */
@@ -1192,8 +1239,45 @@ function transcriptOf(ext: string): boolean | undefined {
   return has;
 }
 
+/**
+ * Where the new session will be, while Claude launches it: what is happening
+ * and where, instead of the session the click came from sitting there as if
+ * nothing had been asked. A failure lands here too, with a way to try again.
+ */
+function mountPendingStart(t: Track) {
+  const m = mounted as NonNullable<typeof mounted>;
+  const failed = startFailed.get(t.id);
+  const key = `start:${t.id}:${failed ?? ''}`;
+  if (m.viewId === key) return;
+  m.viewId = key;
+  const wrap = $('termwrap');
+  const where = t.cwd ? esc(shortPath(t.cwd)) : "this track's folder";
+  if (failed === undefined) {
+    wrap.innerHTML = `<div class="empty" role="status">
+      <span class="spin"></span> starting a new Claude session in <b>${where}</b>…
+      <div class="muted" id="startclock"></div>
+      </div>`;
+    tickStartClock();
+    return;
+  }
+  wrap.innerHTML = `<div class="empty" role="alert">
+    The new session in <b>${where}</b> did not start.
+    <div class="starterr">${esc(failed)}</div>
+    <div class="deadacts">
+      <button class="wbtn primary" id="retrystart">try again</button>
+      <button class="wbtn" id="dropstart">dismiss</button>
+    </div>
+    </div>`;
+  $('retrystart').onclick = () => void startSession(t.id);
+  $('dropstart').onclick = () => dismissFailedStart(t.id);
+}
+
 function mountTerminal(t: Track, session: Ref | undefined) {
   const m = mounted as NonNullable<typeof mounted>;
+  if (pendingStart(t)) {
+    mountPendingStart(t);
+    return;
+  }
   const live = session ? liveSession(session) : undefined;
   // The job's own short id, which is what `claude attach` takes.
   const shortId = live?.kind === 'background' ? (live.shortId as string) : null;
@@ -1392,7 +1476,10 @@ function renderDetail() {
 
   if (!mounted || mounted.trackId !== t.id) buildDetail(t.id);
 
-  const session = currentSession(t);
+  // While a new session starts, the panels belong to it — not to the session
+  // the click came from. It will take the track's unscoped refs, so those are
+  // what the side shows meanwhile.
+  const session = pendingStart(t) ? undefined : currentSession(t);
   patchHead(t);
   patchSessbar(t, session);
   patchSide(t, session);
@@ -1690,7 +1777,7 @@ function renderWizard() {
       <label class="wlab">folder</label>
       <div class="wrow">
         <button type="button" id="wpick" class="wbtn">${w.cwd ? 'change…' : 'choose a folder…'}</button>
-        <span class="wpath">${w.cwd ? esc(w.cwd) : '<span class="muted">none yet</span>'}</span>
+        <span class="wpath">${w.cwd ? `<bdi>${esc(w.cwd)}</bdi>` : '<span class="muted">none yet</span>'}</span>
       </div>
       ${
         recent.length > 0
@@ -2305,8 +2392,14 @@ const SHORTCUTS: Shortcut[] = [
     code: 'KeyW',
     run: () => {
       const t = activeTrack();
-      const r = t && currentSession(t);
-      if (t && r) dropSession(t, r);
+      if (!t || starting === t.id) return;
+      // The failed placeholder is what is on screen, so that is what goes.
+      if (startFailed.has(t.id)) {
+        dismissFailedStart(t.id);
+        return;
+      }
+      const r = currentSession(t);
+      if (r) dropSession(t, r);
     },
   },
   { keys: 'Ctrl+N', what: 'new track', key: 'n', code: 'KeyN', run: () => openWizard() },

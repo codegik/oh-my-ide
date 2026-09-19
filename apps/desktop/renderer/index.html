@@ -140,6 +140,15 @@
   .sstate { color:var(--dim); font-size:var(--fs-xs); }
   .sess .x { color:#5b6478; font-size:var(--fs-s); padding-left:2px; }
   .sess .x:hover { color:#ff5555; }
+  /* the session being started: there is nothing to switch to yet */
+  .sess.pending { cursor:default; }
+  /* same footprint as .dot, so the chip does not shift when it lands */
+  .spin { display:inline-block; box-sizing:border-box; width:8px; height:8px; flex:none;
+          border-radius:50%; border:2px solid var(--line); border-top-color:var(--ON_CLAUDE);
+          animation:spin .8s linear infinite; }
+  .empty .spin { width:.9em; height:.9em; vertical-align:-.1em; margin-right:4px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation-duration:2.4s; } }
   /* icon-only squares, as tall as a chip: one line plus its 4px padding */
   .sadd { display:inline-flex; align-items:center; justify-content:center; flex:none;
           box-sizing:border-box; width:calc(1lh + 8px); height:calc(1lh + 8px); padding:0;
@@ -193,6 +202,8 @@
   .muted { color:var(--dim); } .pad { padding:4px 12px; font-size:var(--fs-s); }
   .deadacts { display:flex; gap:8px; justify-content:center; margin-top:16px; }
   .deaderr { margin-top:10px; font-size:var(--fs-xs); }
+  .starterr { margin-top:10px; font-size:var(--fs-xs); color:#ff8f75; overflow-wrap:anywhere;
+              white-space:pre-wrap; max-height:8lh; overflow:auto; }
   .empty { color:var(--dim); padding:40px 22px; text-align:center; font-size:var(--fs-s); }
 
   /* sheets: new track, attach a session, archived tracks */
@@ -210,6 +221,9 @@
   .wrow { display:flex; align-items:center; gap:9px; }
   .wpath { flex:1; font-size:var(--fs-xs); color:#c9cfdd; overflow:hidden;
            text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
+  /* rtl only so a long path loses its start, not its end; inside, the path is
+     still ltr, or the leading / counts as neutral and is drawn at the far end */
+  .wpath bdi { direction:ltr; unicode-bidi:isolate; }
   .wrecent { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
   .chip { background:#1a1e29; color:var(--dim); border:1px solid var(--line); border-radius:999px;
           padding:3px 10px; font:inherit; font-size:var(--fs-xs); cursor:pointer; }
