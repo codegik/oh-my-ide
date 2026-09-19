@@ -860,7 +860,7 @@ function patchSessbar(t: Track, session: Ref | undefined) {
         <span class="sname">${esc(r.label ?? shortIdOf(sessionIdOf(r)))}</span>
         ${
           holds === 0
-            ? `<span class="x" data-drop="${r.id}" title="remove this session from the track">×</span>`
+            ? `<span class="x" data-drop="${r.id}" title="remove this session from the track (Ctrl+W)">×</span>`
             : ''
         }
       </div>`;
@@ -874,10 +874,10 @@ function patchSessbar(t: Track, session: Ref | undefined) {
           ? `<button class="sadd" id="addsess" disabled aria-busy="true"
                    title="starting a session…" aria-label="starting a session…">${ICON_PLUS}</button>`
           : `<button class="sadd" id="addsess"
-                   title="open another session in this track" aria-label="open another session in this track">${ICON_PLUS}</button>`
+                   title="open another session in this track (Ctrl+T)" aria-label="open another session in this track">${ICON_PLUS}</button>`
       }
       <button class="sadd" id="attachsess"
-              title="attach a session that is already running" aria-label="attach a session that is already running">${ICON_LINK}</button>
+              title="attach a session that is already running (Ctrl+Shift+O)" aria-label="attach a session that is already running">${ICON_LINK}</button>
       <button id="sidetoggle" class="sidetoggle" title="refs">refs ↔</button>
     </div>`;
   $('sesstabs').scrollLeft = scrolled;
@@ -885,26 +885,14 @@ function patchSessbar(t: Track, session: Ref | undefined) {
 
   for (const el of document.querySelectorAll<HTMLElement>('.sess')) {
     el.onclick = (e) => {
-      const drop = (e.target as HTMLElement).dataset.drop;
-      if (drop) {
+      const r = list.find((x) => x.externalId === el.dataset.sid);
+      if (!r) return;
+      if ((e.target as HTMLElement).dataset.drop) {
         e.stopPropagation();
-        void window.omi
-          .rpc('tracks.removeRef', { id: t.id, refId: Number(drop) })
-          .then(() => {
-            // Fall back to whatever session is left.
-            delete activeSession[t.id];
-            saveTabs();
-            return refresh();
-          })
-          .catch((err) => {
-            el.title = String(err.message);
-          });
+        dropSession(t, r);
         return;
       }
-      activeSession[t.id] = String(el.dataset.sid);
-      saveTabs();
-      renderDetail();
-      focusTerminal();
+      selectSession(t, r.externalId);
     };
   }
 
@@ -913,39 +901,92 @@ function patchSessbar(t: Track, session: Ref | undefined) {
     focusTerminal();
   };
   $('attachsess').onclick = () => openAttachSheet(t.id);
-  /**
-   * One click, one session. It opens idle with no prompt and no name — the first
-   * thing typed into the terminal is what gives it both a subject and a title,
-   * so there is nothing to fill in here.
-   */
-  $('addsess').onclick = async () => {
-    if (starting !== null) return;
-    let cur = trackById(t.id);
-    // A session has to start somewhere. If the track has no folder yet, ask for
-    // one and carry on — a button that silently does nothing is worse than a
-    // button that asks a question.
-    if (!cur?.cwd) {
-      const dir = await pickFolder($('addsess'));
-      if (!dir) return;
-      await window.omi.rpc('tracks.update', { id: t.id, patch: { cwd: dir } });
-      await refresh();
-      cur = trackById(t.id);
-      if (!cur?.cwd) return;
-    }
-    starting = t.id;
-    renderDetail();
-    try {
-      const r = await window.omi.rpc('tracks.startSession', { id: t.id });
-      if (r?.session?.sessionId) activeSession[t.id] = `claude:${r.session.sessionId}`;
+  $('addsess').onclick = () => void startSession(t.id);
+}
+
+function selectSession(t: Track, externalId: string) {
+  activeSession[t.id] = externalId;
+  saveTabs();
+  renderDetail();
+  // Reached from the keyboard, the chip may be scrolled out of the strip.
+  document.querySelector('.sess.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  focusTerminal();
+}
+
+/**
+ * Takes a session off its track. One holding refs stays: they live in its scope
+ * and would go with it — the chip has no × for it, and Ctrl+W says why instead.
+ */
+function dropSession(t: Track, r: Ref) {
+  const chip = document.querySelector<HTMLElement>(`.sess[data-sid="${CSS.escape(r.externalId)}"]`);
+  const holds = t.refs.filter(
+    (x) => x.kind !== 'claude_session' && x.sessionId === r.externalId,
+  ).length;
+  if (holds > 0) {
+    if (chip) showHint(chip, `holds ${holds} ref${holds === 1 ? '' : 's'} — remove them first`);
+    return;
+  }
+  void window.omi
+    .rpc('tracks.removeRef', { id: t.id, refId: r.id })
+    .then(() => {
+      // Fall back to whatever session is left.
+      delete activeSession[t.id];
       saveTabs();
-    } catch (err) {
-      $('addsess').title = String((err as Error).message);
-    } finally {
-      starting = null;
-    }
+      return refresh();
+    })
+    .then(focusTerminal)
+    .catch((err) => {
+      if (chip) showHint(chip, String(err.message));
+    });
+}
+
+/**
+ * One click, one session. It opens idle with no prompt and no name — the first
+ * thing typed into the terminal is what gives it both a subject and a title,
+ * so there is nothing to fill in here.
+ */
+async function startSession(trackId: number) {
+  if (starting !== null) return;
+  let cur = trackById(trackId);
+  // A session has to start somewhere. If the track has no folder yet, ask for
+  // one and carry on — a button that silently does nothing is worse than a
+  // button that asks a question.
+  if (!cur?.cwd) {
+    const dir = await pickFolder($('addsess'));
+    if (!dir) return;
+    await window.omi.rpc('tracks.update', { id: trackId, patch: { cwd: dir } });
     await refresh();
-    focusTerminal();
-  };
+    cur = trackById(trackId);
+    if (!cur?.cwd) return;
+  }
+  starting = trackId;
+  renderDetail();
+  try {
+    const r = await window.omi.rpc('tracks.startSession', { id: trackId });
+    if (r?.session?.sessionId) activeSession[trackId] = `claude:${r.session.sessionId}`;
+    saveTabs();
+  } catch (err) {
+    $('addsess').title = String((err as Error).message);
+  } finally {
+    starting = null;
+  }
+  await refresh();
+  focusTerminal();
+}
+
+/** A short-lived note under an element, for feedback a tooltip would hide. */
+let hintTimer: ReturnType<typeof setTimeout> | undefined;
+function showHint(anchor: HTMLElement, text: string) {
+  const el = $('khint');
+  const box = anchor.getBoundingClientRect();
+  el.textContent = text;
+  el.style.left = `${Math.max(8, box.left)}px`;
+  el.style.top = `${box.bottom + 6}px`;
+  el.hidden = false;
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => {
+    el.hidden = true;
+  }, 2200);
 }
 
 function patchSide(t: Track, session: Ref | undefined) {
@@ -1575,6 +1616,7 @@ function openWizard() {
   const recent = [...new Set(tracks.map((t) => t.cwd).filter((c): c is string => !!c))];
   attachSheet = null;
   archiveSheet = null;
+  keysSheet = false;
   wizard = {
     title: '',
     cwd: null,
@@ -1774,6 +1816,7 @@ let attachSheet: {
 
 function openAttachSheet(trackId: number) {
   archiveSheet = null;
+  keysSheet = false;
   attachSheet = {
     trackId,
     picked: new Set(),
@@ -1951,6 +1994,7 @@ let archiveSheet: { query: string; rows: Track[] | null; error: string | null } 
 function openArchiveSheet() {
   wizard = null;
   attachSheet = null;
+  keysSheet = false;
   archiveSheet = { query: '', rows: null, error: null };
   renderModal();
   void window.omi
@@ -2073,12 +2117,14 @@ function renderModal() {
   if (wizard) renderWizard();
   else if (attachSheet) renderAttachSheet();
   else if (archiveSheet) renderArchiveSheet();
+  else if (keysSheet) renderKeysSheet();
   else closeModal();
 }
 function closeModal() {
   wizard = null;
   attachSheet = null;
   archiveSheet = null;
+  keysSheet = false;
   $('modal').hidden = true;
   $('modal').innerHTML = '';
   focusTerminal();
@@ -2110,6 +2156,175 @@ async function openPty(shortId: string, viewId: string, cwd: string | null) {
     openedPtys.delete(viewId);
     t.term.writeln(`\r\n\x1b[31mcould not attach: ${String((err as Error).message)}\x1b[0m`);
   }
+}
+
+// ── keyboard ────────────────────────────────────────────────────────────────
+
+/**
+ * Plain Ctrl on every platform. Nothing here uses Super or Alt, and those are
+ * the modifiers Omarchy's bindings are built on; macOS reserves Cmd and
+ * Ctrl+arrows, not these. The price is that the terminal loses the same keys:
+ * Ctrl+W, Ctrl+K, Ctrl+T, Ctrl+N and Ctrl+[ (a bare ESC) never reach the pty.
+ */
+interface Shortcut {
+  keys: string;
+  what: string;
+  /** Which key, independent of layout: `key` is what the layout types, `code` the US position. */
+  key: string;
+  code: string;
+  shift?: boolean;
+  /** Whether holding the key keeps firing it. */
+  repeats?: boolean;
+  run: () => void;
+}
+
+const activeTrack = () => (activeTab === null ? undefined : trackById(activeTab));
+
+/** Wraps around the open tabs, in the order they sit in the strip. */
+function cycleTrack(step: number) {
+  const open = openTabs.filter((id) => trackById(id));
+  if (open.length === 0) return;
+  const at = activeTab === null ? -1 : open.indexOf(activeTab);
+  const next = open[(at + step + open.length) % open.length];
+  if (next === undefined) return;
+  openTrack(next);
+  document.querySelector('.tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+function cycleSession(step: number) {
+  const t = activeTrack();
+  if (!t) return;
+  const list = sessionRefsOf(t);
+  if (list.length < 2) return;
+  const cur = currentSession(t);
+  const at = cur ? list.indexOf(cur) : -1;
+  const next = list[(at + step + list.length) % list.length];
+  if (next) selectSession(t, next.externalId);
+}
+
+const SHORTCUTS: Shortcut[] = [
+  {
+    keys: 'Ctrl+Tab',
+    what: 'next track',
+    key: 'Tab',
+    code: 'Tab',
+    repeats: true,
+    run: () => cycleTrack(1),
+  },
+  {
+    keys: 'Ctrl+Shift+Tab',
+    what: 'previous track',
+    key: 'Tab',
+    code: 'Tab',
+    shift: true,
+    repeats: true,
+    run: () => cycleTrack(-1),
+  },
+  {
+    keys: 'Ctrl+]',
+    what: 'next session',
+    key: ']',
+    code: 'BracketRight',
+    repeats: true,
+    run: () => cycleSession(1),
+  },
+  {
+    keys: 'Ctrl+[',
+    what: 'previous session',
+    key: '[',
+    code: 'BracketLeft',
+    repeats: true,
+    run: () => cycleSession(-1),
+  },
+  {
+    keys: 'Ctrl+T',
+    what: 'new session in this track',
+    key: 't',
+    code: 'KeyT',
+    run: () => {
+      const t = activeTrack();
+      if (t) void startSession(t.id);
+    },
+  },
+  {
+    keys: 'Ctrl+Shift+O',
+    what: 'attach a running session',
+    key: 'o',
+    code: 'KeyO',
+    shift: true,
+    run: () => {
+      const t = activeTrack();
+      if (t) openAttachSheet(t.id);
+    },
+  },
+  {
+    keys: 'Ctrl+W',
+    what: 'remove this session from the track',
+    key: 'w',
+    code: 'KeyW',
+    run: () => {
+      const t = activeTrack();
+      const r = t && currentSession(t);
+      if (t && r) dropSession(t, r);
+    },
+  },
+  { keys: 'Ctrl+N', what: 'new track', key: 'n', code: 'KeyN', run: () => openWizard() },
+  { keys: 'Ctrl+K', what: 'show these shortcuts', key: 'k', code: 'KeyK', run: toggleKeysSheet },
+];
+
+function shortcutFor(e: KeyboardEvent): Shortcut | undefined {
+  if (!e.ctrlKey || e.altKey || e.metaKey) return undefined;
+  const typed = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  // Shift turns `o` into `O`, and on some layouts `]` into `}`; fall back to the
+  // physical key only when the typed one is not printable ASCII (a non-Latin layout).
+  const ascii = /^[\x20-\x7e]$/.test(e.key) || e.key === 'Tab';
+  return SHORTCUTS.find(
+    (s) => !!s.shift === e.shiftKey && (typed === s.key || (!ascii && e.code === s.code)),
+  );
+}
+
+/** The shortcut list is a sheet like the others, so Esc closes it too. */
+let keysSheet = false;
+function toggleKeysSheet() {
+  if (keysSheet) {
+    closeModal();
+    return;
+  }
+  wizard = null;
+  attachSheet = null;
+  archiveSheet = null;
+  keysSheet = true;
+  $('modal').innerHTML = '';
+  renderModal();
+}
+function renderKeysSheet() {
+  const host = $('modal');
+  host.hidden = false;
+  host.innerHTML = `
+    <div class="sheet" role="dialog" aria-label="keyboard shortcuts">
+      <div class="whead">KEYBOARD SHORTCUTS</div>
+      <div class="keys">
+        ${SHORTCUTS.map((s) => `<kbd>${esc(s.keys)}</kbd><span>${esc(s.what)}</span>`).join('')}
+        <kbd>Esc</kbd><span>close a sheet or the refs panel</span>
+      </div>
+      <div class="wacts"><button type="button" id="kclose" class="wbtn">close</button></div>
+    </div>`;
+  $('kclose').onclick = closeModal;
+}
+
+function onShortcutKey(e: KeyboardEvent) {
+  const s = shortcutFor(e);
+  if (!s) return;
+  // Taken before xterm's textarea sees it, so the key never reaches the pty.
+  e.preventDefault();
+  e.stopPropagation();
+  // Held down, only moving around repeats; nothing gets started or removed twice.
+  if (e.repeat && !s.repeats) return;
+  // A sheet with a form in it keeps the keyboard; only the shortcut list gives
+  // way, to whatever was asked for from it.
+  if (picker || wizard || attachSheet || archiveSheet) return;
+  if (keysSheet && s.run !== toggleKeysSheet) closeModal();
+  s.run();
 }
 
 function openTrack(id: number) {
@@ -2184,7 +2399,7 @@ async function boot() {
         closeTabMenu();
         return;
       }
-      if (wizard || attachSheet || archiveSheet) {
+      if (wizard || attachSheet || archiveSheet || keysSheet) {
         closeModal();
         return;
       }
@@ -2196,6 +2411,8 @@ async function boot() {
     },
     true,
   );
+  // Capture phase, like Escape: the terminal's textarea would otherwise take the key.
+  window.addEventListener('keydown', onShortcutKey, true);
 
   // Load tracks BEFORE restoring tabs: the restore filters against them.
   await refresh();

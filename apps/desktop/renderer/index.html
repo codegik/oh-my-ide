@@ -240,6 +240,16 @@
   .ameta { font-size:var(--fs-xs); color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .arow .wbtn { flex:none; padding:3px 11px; font-size:var(--fs-xs); }
 
+  /* keyboard shortcuts sheet (Ctrl+K) */
+  .keys { display:grid; grid-template-columns:auto 1fr; gap:7px 16px; align-items:center; font-size:var(--fs-s); }
+  .keys kbd { justify-self:start; font:inherit; font-size:var(--fs-xs); color:var(--text); background:#1d2230;
+              border:1px solid var(--line); border-radius:5px; padding:2px 7px; white-space:nowrap; }
+  /* a short-lived note under whatever a shortcut acted on */
+  #khint { position:fixed; z-index:95; background:var(--panel); border:1px solid var(--line); border-radius:6px;
+           padding:5px 9px; font-size:var(--fs-xs); color:var(--text); box-shadow:0 10px 30px rgba(0,0,0,.6);
+           pointer-events:none; }
+  #khint[hidden] { display:none; }
+
   /* folder picker: a box that completes as you type, floated under whatever asked */
   #fpick { position:fixed; z-index:90; background:var(--panel); border:1px solid var(--line);
            border-radius:8px; padding:8px; box-shadow:0 16px 48px rgba(0,0,0,.65); }
@@ -305,7 +315,7 @@
 </head>
 <body>
   <header>
-    <div class="railtop"><button type="button" id="new">+ track</button></div>
+    <div class="railtop"><button type="button" id="new" title="new track (Ctrl+N)">+ track</button></div>
     <div id="tabs" class="tabscroll"></div>
     <button type="button" id="tabsmore" class="tabmore" hidden title="all open tracks">▾</button>
   </header>
@@ -319,6 +329,7 @@
   <div id="tabmenu" hidden></div>
   <div id="modal" hidden></div>
   <div id="fpick" hidden></div>
+  <div id="khint" hidden></div>
   <script src="./bundle.js"></script>
 </body>
 </html>
