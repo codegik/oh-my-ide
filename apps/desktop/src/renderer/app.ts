@@ -1010,15 +1010,42 @@ function focusTerminal() {
   v?.term.focus();
 }
 
+/**
+ * Whether a stopped session still has a transcript to resume from, by session
+ * ref. Asked when one is first put on screen, not on the poll — the answer means
+ * listing every folder Claude keeps. Undefined until the daemon answers.
+ */
+const transcripts = new Map<string, boolean>();
+const askingTranscript = new Set<string>();
+function checkTranscript(ext: string) {
+  if (askingTranscript.has(ext)) return;
+  askingTranscript.add(ext);
+  void window.omi
+    .rpc('sessions.hasTranscript', { session: ext })
+    // Could not tell: keep offering resume, which is what it always did.
+    .catch(() => true)
+    .then((has: boolean) => {
+      askingTranscript.delete(ext);
+      if (transcripts.get(ext) === has) return;
+      transcripts.set(ext, has);
+      renderDetail();
+    });
+}
+function transcriptOf(ext: string): boolean | undefined {
+  const has = transcripts.get(ext);
+  if (has === undefined) checkTranscript(ext);
+  return has;
+}
+
 function mountTerminal(t: Track, session: Ref | undefined) {
   const m = mounted as NonNullable<typeof mounted>;
-  const attachable = session ? isAttachable(session) : false;
+  const live = session ? liveSession(session) : undefined;
   // The job's own short id, which is what `claude attach` takes.
-  const shortId = session && attachable ? (liveSession(session)?.shortId as string) : null;
+  const shortId = live?.kind === 'background' ? (live.shortId as string) : null;
   const viewId = shortId ? `claude:${shortId}` : null;
-  const key =
-    viewId ??
-    `none:${session?.externalId ?? ''}:${liveSession(session ?? { externalId: '' })?.kind ?? ''}`;
+  // Only a session that is gone from the listing can be missing its transcript.
+  const has = session && !live ? transcriptOf(session.externalId) : undefined;
+  const key = viewId ?? `none:${session?.externalId ?? ''}:${live?.kind ?? ''}:${has ?? ''}`;
   if (m.viewId === key) return;
   m.viewId = key;
 
@@ -1043,7 +1070,6 @@ function mountTerminal(t: Track, session: Ref | undefined) {
   }
 
   if (session) {
-    const live = liveSession(session);
     if (live) {
       wrap.innerHTML = `<div class="empty">
         <b>${esc(session.label ?? '')}</b> is an ${esc(live.kind)} session.<br><br>
@@ -1051,30 +1077,21 @@ function mountTerminal(t: Track, session: Ref | undefined) {
         </div>`;
       return;
     }
-    // A stopped session is not a dead end. Resuming keeps its id, so the refs it
-    // holds stay put; starting over is the fallback when the transcript is gone,
-    // and it takes those refs along instead of leaving them on a corpse.
+    const label = esc(session.label ?? '');
     const holds = t.refs.filter(
       (x) => x.kind !== 'claude_session' && x.sessionId === session.externalId,
     ).length;
-    wrap.innerHTML = `<div class="empty">
-      <b>${esc(session.label ?? '')}</b> is no longer running.<br><br>
-      Its transcript is kept, so it can pick up where it left off.
-      <div class="deadacts">
-        <button class="wbtn primary" id="resumesess">resume</button>
-        ${
-          holds > 0
-            ? `<button class="wbtn" id="freshsess"
-                     title="for when it cannot be resumed">new session, keep ${holds} ref${holds === 1 ? '' : 's'}</button>`
-            : ''
-        }
-      </div>
-      <div class="deaderr muted" id="deaderr"></div>
-      </div>`;
-    const busy = (b: HTMLButtonElement, label: string) => {
+    const refCount = `${holds} ref${holds === 1 ? '' : 's'}`;
+    if (has === undefined) {
+      // Asking the daemon takes a moment; offering resume meanwhile would be a
+      // promise the answer may take back.
+      wrap.innerHTML = `<div class="empty"><b>${label}</b> is no longer running.</div>`;
+      return;
+    }
+    const busy = (b: HTMLButtonElement, text: string) => {
       for (const x of wrap.querySelectorAll<HTMLButtonElement>('.deadacts button'))
         x.disabled = true;
-      b.textContent = label;
+      b.textContent = text;
     };
     const fail = (err: unknown) => {
       // The view is keyed on the session, so it is not rebuilt on its own; put
@@ -1084,19 +1101,76 @@ function mountTerminal(t: Track, session: Ref | undefined) {
       const el = document.getElementById('deaderr');
       if (el) el.textContent = (err as Error).message;
     };
+    /** Puts the session that just started on screen. */
+    const land = async (r: any) => {
+      if (r?.session?.sessionId) activeSession[t.id] = `claude:${r.session.sessionId}`;
+      saveTabs();
+      await refresh();
+      focusTerminal();
+    };
+
+    if (!has) {
+      // Its transcript is gone — deleted, or cleaned up by Claude — so resume
+      // has nothing to load. The refs are still ours; a fresh session takes them
+      // and the dead tab goes, instead of leaving a corpse to click past.
+      wrap.innerHTML = `<div class="empty">
+        <b>${label}</b> cannot be resumed.<br><br>
+        Claude no longer has its transcript, so there is nothing to pick up from.<br>
+        A fresh session in ${t.cwd ? esc(shortPath(t.cwd)) : "this track's folder"} takes its place${
+          holds > 0 ? `, keeping its ${refCount}` : ''
+        }.
+        <div class="deadacts">
+          <button class="wbtn primary" id="replacesess">start fresh session</button>
+        </div>
+        <div class="deaderr muted" id="deaderr"></div>
+        </div>`;
+      $<HTMLButtonElement>('replacesess').onclick = async (e) => {
+        busy(e.currentTarget as HTMLButtonElement, 'starting…');
+        try {
+          const r = await window.omi.rpc('tracks.replaceSession', {
+            id: t.id,
+            session: session.externalId,
+          });
+          transcripts.delete(session.externalId);
+          await land(r);
+        } catch (err) {
+          fail(err);
+        }
+      };
+      return;
+    }
+
+    // A stopped session is not a dead end. Resuming keeps its id, so the refs it
+    // holds stay put; starting over is the fallback when resume will not take,
+    // and it takes those refs along instead of leaving them on a corpse.
+    wrap.innerHTML = `<div class="empty">
+      <b>${label}</b> is no longer running.<br><br>
+      Its transcript is kept, so it can pick up where it left off.
+      <div class="deadacts">
+        <button class="wbtn primary" id="resumesess">resume</button>
+        ${
+          holds > 0
+            ? `<button class="wbtn" id="freshsess"
+                     title="for when it cannot be resumed">new session, keep ${refCount}</button>`
+            : ''
+        }
+      </div>
+      <div class="deaderr muted" id="deaderr"></div>
+      </div>`;
     $<HTMLButtonElement>('resumesess').onclick = async (e) => {
       busy(e.currentTarget as HTMLButtonElement, 'resuming…');
       try {
-        const r = await window.omi.rpc('tracks.resumeSession', {
-          id: t.id,
-          session: session.externalId,
-        });
-        if (r?.session?.sessionId) activeSession[t.id] = `claude:${r.session.sessionId}`;
-        saveTabs();
-        await refresh();
-        focusTerminal();
+        await land(
+          await window.omi.rpc('tracks.resumeSession', {
+            id: t.id,
+            session: session.externalId,
+          }),
+        );
       } catch (err) {
         fail(err);
+        // A transcript can go while the app is open; if that is why, this
+        // swaps the panel for the one that offers the way out.
+        checkTranscript(session.externalId);
       }
     };
     const fresh = document.getElementById('freshsess') as HTMLButtonElement | null;
@@ -1104,14 +1178,12 @@ function mountTerminal(t: Track, session: Ref | undefined) {
       fresh.onclick = async () => {
         busy(fresh, 'starting…');
         try {
-          const r = await window.omi.rpc('tracks.startSession', {
-            id: t.id,
-            carryFrom: session.externalId,
-          });
-          if (r?.session?.sessionId) activeSession[t.id] = `claude:${r.session.sessionId}`;
-          saveTabs();
-          await refresh();
-          focusTerminal();
+          await land(
+            await window.omi.rpc('tracks.startSession', {
+              id: t.id,
+              carryFrom: session.externalId,
+            }),
+          );
         } catch (err) {
           fail(err);
         }

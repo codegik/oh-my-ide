@@ -146,3 +146,44 @@ export function pastSessionsFor(cwd: string): PastSession[] {
   }
   return out.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
 }
+
+/** A UUID, or the 8-hex short id a launch can fall back to. Nothing else reaches a path. */
+const SESSION_ID =
+  /^(?:[0-9a-f]{8}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+/**
+ * Whether Claude still has a transcript for a session, in any project folder —
+ * not just the track's, since a session can outlive the folder it was linked
+ * from. `true` also means "could not tell": the answer only ever takes resume
+ * away from the user, so a doubt must never do that.
+ *
+ * Only names are compared; no transcript is opened.
+ */
+export function hasTranscript(sessionId: string): boolean {
+  if (!SESSION_ID.test(sessionId)) return true;
+  const id = sessionId.toLowerCase();
+  const isShort = id.length === 8;
+  const root = path.join(CLAUDE_HOME, 'projects');
+  let dirs: string[];
+  try {
+    dirs = fs.readdirSync(root);
+  } catch (err) {
+    // No projects folder at all: every transcript is gone, this one included.
+    return (err as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+  for (const dir of dirs) {
+    let names: string[];
+    try {
+      names = fs.readdirSync(path.join(root, dir));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOTDIR') continue;
+      return true;
+    }
+    if (
+      names.some((n) => n.endsWith('.jsonl') && (isShort ? n.startsWith(id) : n === `${id}.jsonl`))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
