@@ -46,6 +46,15 @@ jobs:
 
       - run: pnpm build
 
+      # verify:abi and the packaged smoke test both run the Electron binary, and
+      # it needs these even with ELECTRON_RUN_AS_NODE: they are linked, not
+      # dlopened, so it will not start without them. Do not rely on the runner
+      # image happening to have them.
+      - name: Install Electron's runtime libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgtk-3-0t64 libnss3 libasound2t64 libgbm1
+
       # pretest runs verify:abi: the native modules must load under Electron.
       - run: pnpm test
 

@@ -105,8 +105,33 @@ function broadcast(msg: unknown): void {
  * onto refs so court derivation has something to read, and so a session going
  * from WORKING to NEEDS_INPUT flips its Track to ON_ME by itself.
  */
+/**
+ * Asking the CLI for its sessions must never take the track rail down with it.
+ * On a machine where Claude Code is not installed yet — a fresh package install
+ * — `claude agents` fails with ENOENT, and since `tracks.list` syncs on every
+ * poll, letting that through would turn "no sessions" into "no tracks", though
+ * tracks live in SQLite and are perfectly readable without Claude. Degrades to
+ * an empty listing, as getCompat degrades to its `degraded` tier. Logged only
+ * when the message changes: the rail polls every few seconds.
+ */
+let lastListError = '';
+async function listSessionsOrNone(): Promise<NormalizedSession[]> {
+  try {
+    const sessions = await runner.list();
+    lastListError = '';
+    return sessions;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg !== lastListError) {
+      lastListError = msg;
+      process.stderr.write(`[omid] could not list Claude sessions: ${msg}\n`);
+    }
+    return [];
+  }
+}
+
 async function syncSessions(): Promise<NormalizedSession[]> {
-  const sessions = await runner.list();
+  const sessions = await listSessionsOrNone();
   const touched = new Set<number>();
   // Walk our refs rather than the listing: a session can be listed under a
   // newer UUID than the one we stored (see isSameSession).
