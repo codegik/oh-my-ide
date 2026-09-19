@@ -102,6 +102,9 @@ copy(
   path.join(OUT, 'share/applications/oh-my-ide.desktop'),
 );
 copy(r('apps/desktop/assets/icon.png'), path.join(OUT, 'share/pixmaps/oh-my-ide.png'));
+// MIT names the copyright holder, so a package has to ship the text itself. It
+// sits at the root rather than under share/: each distro has its own path for it.
+copy(r('LICENSE'), path.join(OUT, 'LICENSE'));
 
 console.log('==> smoke-testing the packaged daemon');
 await smoke();

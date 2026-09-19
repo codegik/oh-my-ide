@@ -30,21 +30,15 @@ it to 1.
 
 ## One-time setup
 
-Nothing is published until these are done. Until then the AUR step is skipped with a
-warning, and the GitHub release still goes out.
+The AUR step is skipped with a warning until these are done; the GitHub release still
+goes out.
 
-1. **Pick a license.** The PKGBUILD says `LicenseRef-unknown` because the repo has no
-   `LICENSE` file. Add one, then set `license=` in the PKGBUILD to its SPDX id (for example
-   `MIT`). If the license text names the copyright holder (MIT, BSD, ISC), Arch also wants
-   the file installed:
-   `install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"`, which means
-   putting `LICENSE` in the tarball from `tools/scripts/package-linux.mjs`.
-2. **An AUR account** at https://aur.archlinux.org/register, with an SSH key made just for CI:
+1. **An AUR account** at https://aur.archlinux.org/register, with an SSH key made just for CI:
    ```sh
    ssh-keygen -t ed25519 -f ~/.ssh/aur-oh-my-ide -N '' -C 'oh-my-ide release CI'
    ```
    Paste `~/.ssh/aur-oh-my-ide.pub` into *My Account → SSH Public Key*.
-3. **The private key as a repo secret:**
+2. **The private key as a repo secret:**
    ```sh
    gh secret set AUR_SSH_PRIVATE_KEY < ~/.ssh/aur-oh-my-ide
    ```

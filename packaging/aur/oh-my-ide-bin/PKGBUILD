@@ -12,7 +12,7 @@ pkgrel=1
 pkgdesc='A local-first cockpit for running many Claude Code sessions in parallel'
 arch=('x86_64')
 url='https://github.com/codegik/oh-my-ide'
-license=('LicenseRef-unknown')
+license=('MIT')
 # Electron is bundled: the app pins a newer major than Arch packages, and its
 # native modules are built for exactly that one. These are what its binaries
 # link against, as namcap reports them.
@@ -34,4 +34,6 @@ package() {
   cd "$_pkgname-$pkgver-linux-x64"
   install -d "$pkgdir/usr"
   cp -a --no-preserve=ownership bin lib share "$pkgdir/usr/"
+  # MIT names the copyright holder, so Arch wants the text shipped, not just the id.
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

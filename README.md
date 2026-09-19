@@ -206,3 +206,9 @@ pnpm test                  # unit + contract tests
 OMI_LIVE=1 pnpm vitest run # also run contract tests against the installed CLI
 pnpm typecheck
 ```
+
+Cutting a release, and how the Arch package is built: [`docs/RELEASING.md`](docs/RELEASING.md).
+
+## License
+
+[MIT](LICENSE) © Inacio Klassmann
