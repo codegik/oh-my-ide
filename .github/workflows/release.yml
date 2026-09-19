@@ -1,0 +1,122 @@
+# Pushing a `v*` tag publishes a release: a GitHub release with the Linux
+# tarball, then the AUR package oh-my-ide-bin pointing at it. Users see the new
+# version the next time they run `yay -Syu` (or paru, or any AUR helper).
+#
+# The tag must match "version" in the root package.json. See docs/RELEASING.md.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha256: ${{ steps.package.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Check the tag matches package.json
+        id: version
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+      # pnpm at the version in package.json's packageManager field.
+      - run: corepack enable
+
+      # The postinstall rebuilds node-pty and better-sqlite3 for Electron's ABI.
+      - run: pnpm install --frozen-lockfile
+
+      # pnpm can skip electron's own postinstall, which downloads the binary.
+      - run: test -x node_modules/electron/dist/electron || node node_modules/electron/install.js
+
+      - run: pnpm build
+
+      # pretest runs verify:abi: the native modules must load under Electron.
+      - run: pnpm test
+
+      # Stages the release, smoke-tests the packaged daemon, then packs it.
+      - name: Package
+        id: package
+        run: |
+          pnpm package:linux
+          echo "sha256=$(cut -d' ' -f1 release/*.tar.gz.sha256)" >>"$GITHUB_OUTPUT"
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/*.tar.gz release/*.tar.gz.sha256 \
+            --title "oh-my-ide $GITHUB_REF_NAME" --generate-notes
+
+  aur:
+    needs: linux
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+    env:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+      VERSION: ${{ needs.linux.outputs.version }}
+      SHA256: ${{ needs.linux.outputs.sha256 }}
+    steps:
+      - name: Skip without an AUR key
+        if: env.AUR_SSH_PRIVATE_KEY == ''
+        run: echo "::warning::AUR_SSH_PRIVATE_KEY is not set; the AUR package was not updated"
+
+      - name: Install tools
+        if: env.AUR_SSH_PRIVATE_KEY != ''
+        run: pacman -Syu --noconfirm --needed git openssh
+
+      - uses: actions/checkout@v5
+        if: env.AUR_SSH_PRIVATE_KEY != ''
+
+      - name: Set up SSH for the AUR
+        if: env.AUR_SSH_PRIVATE_KEY != ''
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" >~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan -t ed25519 aur.archlinux.org >>~/.ssh/known_hosts
+          printf 'Host aur.archlinux.org\n  User aur\n  IdentityFile ~/.ssh/aur\n' >~/.ssh/config
+
+      - name: Update the PKGBUILD
+        if: env.AUR_SSH_PRIVATE_KEY != ''
+        run: |
+          git clone ssh://aur@aur.archlinux.org/oh-my-ide-bin.git aur
+          cp packaging/aur/oh-my-ide-bin/PKGBUILD aur/PKGBUILD
+          sed -i -e "s/^pkgver=.*/pkgver=$VERSION/" \
+                 -e "s/^pkgrel=.*/pkgrel=1/" \
+                 -e "s/^sha256sums=.*/sha256sums=('$SHA256')/" aur/PKGBUILD
+
+      # makepkg refuses to run as root. Building for real, not just printing the
+      # .SRCINFO, proves the published URL and checksum before users get them.
+      - name: Build it and write .SRCINFO
+        if: env.AUR_SSH_PRIVATE_KEY != ''
+        run: |
+          useradd -m builder
+          chown -R builder aur
+          su builder -c 'cd aur && makepkg --nodeps --noconfirm && makepkg --printsrcinfo >.SRCINFO'
+
+      - name: Push to the AUR
+        if: env.AUR_SSH_PRIVATE_KEY != ''
+        run: |
+          git config --global --add safe.directory "$PWD/aur"
+          cd aur
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add PKGBUILD .SRCINFO
+          git commit -m "Update to $VERSION"
+          git push origin HEAD:master

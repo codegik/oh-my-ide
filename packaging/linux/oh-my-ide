@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Launcher for an installed oh-my-ide (/usr/bin/oh-my-ide from the AUR package).
+# A checkout uses ./start.sh instead; this one never builds anything.
+#
+# The daemon outlives this script on purpose: closing the window, quitting the
+# app, or killing this shell must never stop a Claude session.
+set -uo pipefail
+
+# The Electron tree sits beside bin/ in the same prefix: /usr/lib/oh-my-ide.
+here="$(dirname "$(readlink -f "$0")")"
+app="$here/../lib/oh-my-ide/oh-my-ide"
+
+# Launched from a desktop entry, this gets the session's PATH, not the shell's,
+# and `claude` often lives somewhere only the shell rc adds (npm under nvm or
+# mise). The daemon runs `claude` from this PATH, so without it every track says
+# Claude Code is missing. Borrow PATH from a login shell; the marker skips
+# whatever the rc files print.
+if ! command -v claude >/dev/null 2>&1; then
+  shell_path="$("${SHELL:-/bin/bash}" -lic 'printf "\n__OMI_PATH__%s" "$PATH"' 2>/dev/null </dev/null \
+    | sed -n 's/^__OMI_PATH__//p' | tail -1)" || true
+  [ -n "$shell_path" ] && export PATH="$shell_path"
+fi
+
+# With no terminal, output goes nowhere and a failed launch looks like nothing
+# happened. Keep a log and say so. Tests for a controlling terminal, not -t 1.
+if ! { : >/dev/tty; } 2>/dev/null; then
+  LOG="${XDG_STATE_HOME:-$HOME/.local/state}/oh-my-ide/launch.log"
+  mkdir -p "$(dirname "$LOG")"
+  exec >>"$LOG" 2>&1
+  echo "--- $(date '+%F %T') oh-my-ide $*"
+  # Not exec'd, so a crash on startup still reaches the notification below.
+  "$app" "$@"
+  rc=$?
+  if [ $rc -ne 0 ] && command -v notify-send >/dev/null 2>&1; then
+    notify-send -a oh-my-ide "oh-my-ide exited with an error" "exit $rc; see $LOG"
+  fi
+  exit $rc
+fi
+
+exec "$app" "$@"

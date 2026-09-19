@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=oh-my-ide
+Comment=A local-first cockpit for parallel Claude Code sessions
+Exec=oh-my-ide
+Icon=oh-my-ide
+StartupWMClass=oh-my-ide
+Terminal=false
+Categories=Development;IDE;

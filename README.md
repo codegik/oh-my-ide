@@ -97,7 +97,25 @@ Nothing is locked in.
 - 🚫 **No Sessions screen, on purpose.** Claude Code already has `claude agents`. In oh-my-ide
   a session belongs to a track; it isn't a place you go to.
 
-## Quick start
+## Install
+
+### Arch Linux
+
+oh-my-ide is in the AUR as [`oh-my-ide-bin`](https://aur.archlinux.org/packages/oh-my-ide-bin):
+
+```sh
+yay -S oh-my-ide-bin      # or paru, or any AUR helper
+```
+
+It shows up in your app launcher, and new versions arrive with your usual `yay -Syu`.
+It bundles its own Electron, so you don't need Node or pnpm. You do need **Claude Code 2.1+**
+(`claude`). Wherever you installed it (npm, nvm, mise or the native installer), the app finds
+it through your login shell's `PATH`.
+
+After an upgrade, the next launch swaps in the new daemon. Your Claude sessions are not
+touched.
+
+### From source
 
 Runs on **Arch Linux** and **macOS** (see [Platforms](#platforms)). Requires **Node 22+**,
 **pnpm**, and **Claude Code 2.1+** on `PATH`.
@@ -128,18 +146,21 @@ detects the OS and handles the differences.
 
 ### Arch Linux
 
+To install the package, see [Install](#install). To run from source:
+
 ```sh
 sudo pacman -S --needed git nodejs pnpm   # or bring your own node via nvm / mise
 ```
 
 - **Native Wayland.** Electron is started with the Ozone platform hint, so on Hyprland,
   Sway or GNOME it renders natively instead of blurry through XWayland.
-- **Launcher entry.** `./start.sh install` writes `~/.local/share/applications/oh-my-ide.desktop`
-  with the app icon, so it shows up in walker, rofi, fuzzel or your desktop's app grid.
+- **Launcher entry.** The package installs one. From source, `./start.sh install` writes
+  `~/.local/share/applications/oh-my-ide.desktop` with the app icon, so it shows up in walker,
+  rofi, fuzzel or your desktop's app grid.
 - **Works when node comes from nvm / mise.** A launcher doesn't get your shell's `PATH`, so
-  `start.sh` borrows it from your login shell. If a launch from the menu does nothing, the
-  reason is in `~/.local/state/oh-my-ide/start.log` (and in a desktop notification, if
-  `notify-send` is installed).
+  both `oh-my-ide` and `start.sh` borrow it from your login shell. If a launch from the menu
+  does nothing, the reason is in `~/.local/state/oh-my-ide/launch.log` (package) or
+  `start.log` (source), and in a desktop notification if `notify-send` is installed.
 - **Matches your desktop's font size.** On GNOME-style desktops the UI reads your text size
   from `gsettings`, so the app is as readable as the rest of your system.
 

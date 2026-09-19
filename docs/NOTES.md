@@ -70,7 +70,10 @@ apps/
   desktop/         Electron main (dumb frame proxy) + preload + renderer.
 tools/
   fixtures/        real `claude --help` v2.1.272, kept as a contract fixture.
-  scripts/         verify-abi.mjs
+  scripts/         verify-abi.mjs, package-linux.mjs (the release tarball; see RELEASING.md)
+packaging/
+  linux/           /usr/bin/oh-my-ide launcher and the .desktop entry
+  aur/             oh-my-ide-bin PKGBUILD; the release workflow publishes it
 ```
 
 ### Architectural spine

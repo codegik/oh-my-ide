@@ -1,0 +1,37 @@
+# Maintainer: Inacio Klassmann <https://github.com/codegik>
+#
+# The source of truth for the AUR package of the same name. On a `v*` tag,
+# .github/workflows/release.yml builds the release tarball this downloads, sets
+# pkgver and sha256sums below, and pushes the result to the AUR. Edit it here,
+# not in the AUR repo: the next release overwrites that copy.
+
+pkgname=oh-my-ide-bin
+_pkgname=oh-my-ide
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='A local-first cockpit for running many Claude Code sessions in parallel'
+arch=('x86_64')
+url='https://github.com/codegik/oh-my-ide'
+license=('LicenseRef-unknown')
+# Electron is bundled: the app pins a newer major than Arch packages, and its
+# native modules are built for exactly that one. These are what its binaries
+# link against, as namcap reports them.
+depends=('alsa-lib' 'at-spi2-core' 'bash' 'cairo' 'dbus' 'expat' 'glib2' 'glibc' 'gtk3'
+         'libcups' 'libgcc' 'libstdc++' 'libx11' 'libxcb' 'libxcomposite' 'libxdamage'
+         'libxext' 'libxfixes' 'libxkbcommon' 'libxrandr' 'nspr' 'nss' 'pango' 'systemd-libs')
+optdepends=('claude-code: the Claude Code CLI the app drives (or install it your own way)'
+            'libnotify: a desktop notification when a launch from the menu fails')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+# Electron's binaries ship stripped; stripping again can break them.
+options=('!strip' '!debug')
+source=("$url/releases/download/v$pkgver/$_pkgname-$pkgver-linux-x64.tar.gz")
+# Filled in by the release workflow from the tarball it just published.
+sha256sums=('SKIP')
+
+package() {
+  # The tarball is already laid out as a /usr prefix (tools/scripts/package-linux.mjs).
+  cd "$_pkgname-$pkgver-linux-x64"
+  install -d "$pkgdir/usr"
+  cp -a --no-preserve=ownership bin lib share "$pkgdir/usr/"
+}
