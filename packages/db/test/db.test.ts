@@ -161,6 +161,45 @@ describe('Db', () => {
     db.close();
   });
 
+  it('replaces a session that cannot be resumed, moving its refs and dropping its tab', () => {
+    const db = fresh();
+    const t = db.createTrack({ title: 'x' });
+    db.addRef({
+      trackId: t.id,
+      kind: 'claude_session',
+      externalId: 'claude:old',
+      label: 'Plugin installation',
+      state: 'WORKING',
+    });
+    db.addRef({
+      trackId: t.id,
+      kind: 'claude_session',
+      externalId: 'claude:new',
+      state: 'STARTING',
+    });
+    db.addRef({ trackId: t.id, sessionId: 'claude:old', kind: 'github_pr', externalId: 'a/b#1' });
+    db.addRef({ trackId: t.id, sessionId: 'claude:old', kind: 'jira_issue', externalId: 'PAY-1' });
+    db.addRef({ trackId: t.id, sessionId: 'claude:new', kind: 'jira_issue', externalId: 'PAY-1' });
+    db.replaceSession(t.id, 'claude:old', 'claude:new');
+    const track = db.getTrack(t.id);
+    const refs = track?.refs ?? [];
+    expect(refs.filter((r) => r.kind === 'claude_session').map((r) => r.externalId)).toEqual([
+      'claude:new',
+    ]);
+    // Nothing is left scoped to the session that is gone, and the duplicate
+    // ticket collapses into the one the new session already had.
+    expect(refs.some((r) => r.sessionId === 'claude:old')).toBe(false);
+    expect(
+      refs
+        .filter((r) => r.sessionId === 'claude:new')
+        .map((r) => r.externalId)
+        .sort(),
+    ).toEqual(['PAY-1', 'a/b#1']);
+    // The stale WORKING state went with the old ref, so the court follows the new one.
+    expect(track?.court).not.toBe('ON_CLAUDE');
+    db.close();
+  });
+
   it('scopes refs to a session, so two sessions can hold the same PR', () => {
     const db = fresh();
     const t = db.createTrack({ title: 'x' });

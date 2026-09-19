@@ -390,6 +390,28 @@ export class Db {
     this.moveSessionRefs(trackId, fromSession, toSession);
   }
 
+  /**
+   * A session whose transcript is gone, swapped for a fresh one that is already
+   * linked. Its refs move over and its own ref goes: there is nothing left to
+   * resume, so a tab for it would only be a dead end. What stayed behind after
+   * the move is something the new session already holds, so dropping it loses
+   * nothing. One transaction, so a failure never leaves refs on neither.
+   */
+  replaceSession(trackId: number, fromSession: string, toSession: string): void {
+    this.db.transaction(() => {
+      this.moveSessionRefs(trackId, fromSession, toSession);
+      this.db
+        .prepare(
+          `DELETE FROM track_ref
+            WHERE track_id = ?
+              AND ((kind = 'claude_session' AND external_id = ?)
+                   OR (kind <> 'claude_session' AND session_id = ?))`,
+        )
+        .run(trackId, fromSession, fromSession);
+      this.recomputeCourt(trackId);
+    })();
+  }
+
   adoptOrphanRefs(trackId: number, sessionExternalId: string): void {
     this.db
       .prepare(

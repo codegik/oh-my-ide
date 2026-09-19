@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 // had to deal with this; history.ts does, so the env var must be set before
 // safe-fs.js/history.js are ever evaluated — hence the dynamic import below.
 process.env.CLAUDE_CONFIG_DIR = mkdtempSync(path.join(os.tmpdir(), 'omi-history-'));
-const { pastSessionsFor } = await import('../src/history.js');
+const { hasTranscript, pastSessionsFor } = await import('../src/history.js');
 
 const HOME = process.env.CLAUDE_CONFIG_DIR;
 
@@ -134,5 +134,24 @@ describe('pastSessionsFor', () => {
       '88888888-2222-3333-4444-555555555555',
       '77777777-2222-3333-4444-555555555555',
     ]);
+  });
+});
+
+describe('hasTranscript', () => {
+  it('finds a transcript in any project folder, by full or short id', () => {
+    writeTranscript('/tmp/omi-fixture-anywhere', 'abcdef01-2222-3333-4444-555555555555', [
+      { cwd: '/x' },
+    ]);
+    expect(hasTranscript('abcdef01-2222-3333-4444-555555555555')).toBe(true);
+    expect(hasTranscript('abcdef01')).toBe(true);
+  });
+
+  it('says so when the transcript is gone', () => {
+    expect(hasTranscript('00000000-9999-9999-9999-999999999999')).toBe(false);
+    expect(hasTranscript('0000dead')).toBe(false);
+  });
+
+  it('never lets a malformed id reach a path, and gives it the benefit of the doubt', () => {
+    expect(hasTranscript('../../etc/passwd')).toBe(true);
   });
 });

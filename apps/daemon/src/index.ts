@@ -3,7 +3,14 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import type { ClaudeCompat, NormalizedSession } from '@omi/claude-adapter';
-import { ClaudeBgRunner, isSameSession, pastSessionsFor, probe, shortIdOf } from '@omi/claude-adapter';
+import {
+  ClaudeBgRunner,
+  hasTranscript,
+  isSameSession,
+  pastSessionsFor,
+  probe,
+  shortIdOf,
+} from '@omi/claude-adapter';
 import { parseRef } from '@omi/core';
 import { Db } from '@omi/db';
 import {
@@ -144,6 +151,38 @@ function adoptTitle(viewId: string, title: string): void {
     touched.push(r.trackId);
   }
   if (touched.length > 0) broadcast({ t: 'changed', entity: 'track', ids: [...new Set(touched)] });
+}
+
+/**
+ * Starts a new session in a track's folder and links it. The track's unscoped
+ * refs go to it, as they would to any first session.
+ */
+async function startTrackSession(
+  track: NonNullable<ReturnType<Db['getTrack']>>,
+  p: { cwd?: unknown; prompt?: unknown; name?: unknown },
+) {
+  const cwd = String(p.cwd ?? track.cwd ?? '').trim();
+  if (!cwd) throw new Error('this track has no folder; pass one');
+  // No prompt: the session opens idle and waits for the user to type into it,
+  // which is what a new terminal should do. Nothing is spent up front, and the
+  // first message is what ends up naming it (see adoptTitle).
+  const prompt = String(p.prompt ?? '').trim();
+  const started = await runner.start({
+    cwd,
+    ...(prompt ? { prompt } : {}),
+    ...(p.name ? { name: String(p.name) } : {}),
+  });
+  db.addRef({
+    trackId: track.id,
+    kind: 'claude_session',
+    externalId: `claude:${started.sessionId}`,
+    label: started.name ?? started.shortId,
+    state: 'STARTING',
+    role: 'implementation',
+    linkRule: 'started-here',
+  });
+  db.adoptOrphanRefs(track.id, `claude:${started.sessionId}`);
+  return started;
 }
 
 type Handler = (params: any, sock: net.Socket) => Promise<unknown>;
@@ -314,31 +353,45 @@ const methods: Record<string, Handler> = {
   'tracks.startSession': async (p) => {
     const track = db.getTrack(Number(p.id));
     if (!track) throw new Error('no such track');
-    const cwd = String(p.cwd ?? track.cwd ?? '').trim();
-    if (!cwd) throw new Error('this track has no folder; pass one');
-    // No prompt: the session opens idle and waits for the user to type into it,
-    // which is what a new terminal should do. Nothing is spent up front, and the
-    // first message is what ends up naming it (see adoptTitle).
-    const prompt = String(p.prompt ?? '').trim();
-    const started = await runner.start({
-      cwd,
-      ...(prompt ? { prompt } : {}),
-      ...(p.name ? { name: String(p.name) } : {}),
-    });
-    db.addRef({
-      trackId: track.id,
-      kind: 'claude_session',
-      externalId: `claude:${started.sessionId}`,
-      label: started.name ?? started.shortId,
-      state: 'STARTING',
-      role: 'implementation',
-      linkRule: 'started-here',
-    });
-    db.adoptOrphanRefs(track.id, `claude:${started.sessionId}`);
+    const started = await startTrackSession(track, p);
     // Starting over from a session that is gone: bring its refs along.
     if (typeof p.carryFrom === 'string' && p.carryFrom) {
       db.moveSessionRefs(track.id, p.carryFrom, `claude:${started.sessionId}`);
     }
+    broadcast({ t: 'changed', entity: 'track', ids: [track.id] });
+    return { track: db.getTrack(track.id), session: started };
+  },
+
+  /**
+   * Whether a session can still be resumed at all. Asked only when a stopped
+   * session is put on screen, never from the poll: it lists every project
+   * folder Claude has.
+   */
+  'sessions.hasTranscript': async (p) =>
+    hasTranscript(String(p.session ?? '').replace(/^claude:/, '')),
+
+  /**
+   * For a session whose transcript is gone: a fresh one takes its place in the
+   * track, with everything it held. Refuses while the old one is still running
+   * — that one is not broken, and deleting its tab would orphan a live job.
+   */
+  'tracks.replaceSession': async (p) => {
+    const track = db.getTrack(Number(p.id));
+    if (!track) throw new Error('no such track');
+    const ext = String(p.session ?? '');
+    const old = track.refs.find((r) => r.kind === 'claude_session' && r.externalId === ext);
+    if (!old) throw new Error('that session is not part of this track');
+    const live = (await runner.list()).find((s) => isSameSession(s, ext.replace(/^claude:/, '')));
+    if (live) throw new Error('that session is still running; open it instead');
+    const started = await startTrackSession(track, p);
+    const now = `claude:${started.sessionId}`;
+    db.replaceSession(track.id, ext, now);
+    db.addEvent({
+      trackId: track.id,
+      source: 'user',
+      kind: 'session.replaced',
+      title: `started a fresh session for "${old.label ?? ext}", which could not be resumed`,
+    });
     broadcast({ t: 'changed', entity: 'track', ids: [track.id] });
     return { track: db.getTrack(track.id), session: started };
   },
