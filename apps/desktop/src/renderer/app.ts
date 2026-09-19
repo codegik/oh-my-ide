@@ -270,10 +270,11 @@ window.omi.onPty((viewId, epoch, offset, bytes) => {
 });
 
 /**
- * The ONLY thing that refreshes the UI on its own. There is no polling here on
- * purpose: the daemon already watches Claude's supervisor and pushes `changed`
- * when a session state or a track actually moves, so a timer would just be a
- * second, worse copy of that — one that repaints while you are typing.
+ * What refreshes the UI on its own. There is no polling here on purpose: the
+ * daemon already watches Claude's supervisor and pushes `changed` when a session
+ * state or a track actually moves, so a timer would just be a second, worse copy
+ * of that — one that repaints while you are typing. The one exception is the
+ * token count of a working session; see the timer in boot().
  */
 window.omi.onEvent((msg) => {
   if (msg?.t === 'changed') {
@@ -611,10 +612,10 @@ function renderTabs() {
 let mounted: {
   trackId: number;
   viewId: string | null;
-  sig: { head: string; sess: string; side: string; time: string };
+  sig: { head: string; sess: string; side: string; time: string; usage: string };
 } | null = null;
 
-const EMPTY_SIG = { head: '', sess: '', side: '', time: '' };
+const EMPTY_SIG = { head: '', sess: '', side: '', time: '', usage: '' };
 
 const trackById = (id: number) =>
   tracks.find((x) => x.id === id) ?? closedTracks.find((x) => x.id === id);
@@ -634,6 +635,7 @@ const DETAIL_SKELETON = `
     </div>
     <div class="side" id="side">
       <button id="sideclose" class="sideclose" title="close (Esc)">×</button>
+      <div id="usage" class="usage"></div>
       <div id="scopebar"></div>
       <input id="paste" placeholder="paste a PR / Slack / Jira link, or PAY-123" />
       <div id="sidetop"></div>
@@ -989,6 +991,77 @@ function patchSide(t: Track, session: Ref | undefined) {
   }
 }
 
+/** 1234 → 1.2k, 411975 → 412k, 40574131 → 40.6M. Tokens are read at a glance. */
+function fmtTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 10_000) return `${(n / 1000).toFixed(1)}k`;
+  if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+/**
+ * What the session on screen has spent, above its refs. Read from the
+ * transcript by the daemon, so it works for a session that has stopped too.
+ * Context comes first: it is the number you act on — it says when a
+ * conversation has grown heavy enough to compact or start over — where the
+ * totals only ever go up.
+ */
+function patchUsage(t: Track, session: Ref | undefined) {
+  const el = document.getElementById('usage');
+  if (!el) return;
+  const sid = session?.externalId ?? '';
+  // A different session's numbers must not linger while this one's load.
+  if (el.dataset.sid !== sid) {
+    el.dataset.sid = sid;
+    el.innerHTML = '';
+    if (mounted) mounted.sig.usage = '';
+  }
+  if (!session) return;
+
+  const stored = sessionIdOf(session);
+  const live = liveSession(session);
+  const ids = live && live.sessionId !== stored ? [stored, live.sessionId] : [stored];
+  void window.omi
+    .rpc('sessions.usage', { ids, cwd: live?.cwd ?? t.cwd ?? '' })
+    .then((u: any) => {
+      const m = mounted;
+      if (!m || m.trackId !== t.id || el.dataset.sid !== sid || !el.isConnected) return;
+      const row = (k: string, v: string, tip = '') =>
+        `<div class="kv" ${tip ? `title="${esc(tip)}"` : ''}><span class="rk">${k}</span><span class="kvv">${v}</span></div>`;
+      let html = '<div class="shead">SESSION</div>';
+      if (!u || u.requests === 0) {
+        html += '<div class="muted pad">nothing spent yet</div>';
+      } else {
+        const input = u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens;
+        const cached = input > 0 ? Math.round((u.cacheReadTokens / input) * 100) : 0;
+        html +=
+          row(
+            'context',
+            `${fmtTokens(u.contextTokens)} tokens`,
+            'what the last request sent: how much the conversation weighs now. Drops after a compaction.',
+          ) +
+          row(
+            'output',
+            fmtTokens(u.outputTokens),
+            `tokens written by Claude, thinking included, over ${u.requests} requests`,
+          ) +
+          row(
+            'input',
+            `${fmtTokens(input)} <span class="muted">· ${cached}% cached</span>`,
+            `fresh ${u.inputTokens.toLocaleString()} · cache read ${u.cacheReadTokens.toLocaleString()} · cache write ${u.cacheWriteTokens.toLocaleString()}\n` +
+              "from the transcript: the CLI's own side requests (titles, classifiers) are not in it",
+          ) +
+          (u.gitBranch
+            ? row('branch', esc(u.gitBranch === 'HEAD' ? 'detached' : u.gitBranch))
+            : '');
+      }
+      if (m.sig.usage === html) return;
+      m.sig.usage = html;
+      el.innerHTML = html;
+    })
+    .catch(() => {});
+}
+
 /**
  * Mounting is the one thing allowed to move the terminal element, and it only
  * happens when the session on screen actually changes.
@@ -1209,14 +1282,13 @@ function patchTimeline(t: Track) {
     const el = document.getElementById('timeline');
     const m = mounted;
     if (!el || !m || m.trackId !== t.id) return;
-    const html =
-      rows
-        .map(
-          (r) => `
+    const html = rows
+      .map(
+        (r) => `
       <div class="ev"><span class="evt">${ago(r.occurred_at)}</span>
       <span class="evb">${esc(r.body ?? r.title)}</span></div>`,
-        )
-        .join('') || '<div class="muted pad">no notes yet</div>';
+      )
+      .join('');
     if (m.sig.time === html) return;
     m.sig.time = html;
     el.innerHTML = html;
@@ -1242,6 +1314,7 @@ function renderDetail() {
   patchHead(t);
   patchSessbar(t, session);
   patchSide(t, session);
+  patchUsage(t, session);
   mountTerminal(t, session);
   patchTimeline(t);
 }
@@ -2140,6 +2213,17 @@ async function boot() {
   window.addEventListener('resize', () => {
     for (const [, v] of terms) fitTerm(v);
   });
+
+  // Tokens pile up mid-turn with no state change to push a `changed`, so while
+  // the session on screen is working, re-read what it has spent. Only the usage
+  // block is touched, and only when its numbers moved.
+  setInterval(() => {
+    const t = activeTab === null ? undefined : trackById(activeTab);
+    const s = t ? currentSession(t) : undefined;
+    if (!t || !s) return;
+    const state = liveSession(s)?.state ?? s.state;
+    if (state === 'WORKING' || state === 'STARTING') patchUsage(t, s);
+  }, 5000);
 
   focusTerminal();
 }

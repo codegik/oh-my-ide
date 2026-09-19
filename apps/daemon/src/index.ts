@@ -9,6 +9,7 @@ import {
   isSameSession,
   pastSessionsFor,
   probe,
+  sessionUsage,
   shortIdOf,
 } from '@omi/claude-adapter';
 import { parseRef } from '@omi/core';
@@ -212,6 +213,17 @@ const methods: Record<string, Handler> = {
       .slice(0, 20);
   },
 
+  /**
+   * Tokens a session has spent, from its transcript. Takes every id the session
+   * has gone by — the one a ref stored and the one it is listed under now — and
+   * reads only what was appended since the last ask, so the UI can call it
+   * while a session works without re-reading megabytes.
+   */
+  'sessions.usage': async (p) => {
+    const ids = (Array.isArray(p.ids) ? p.ids : []).map(String).filter(Boolean).slice(0, 4);
+    if (ids.length === 0) return null;
+    return sessionUsage(ids, p.cwd ? String(p.cwd) : undefined);
+  },
 
   /** Starts a background session in a folder, idle unless a prompt is given. */
   'sessions.create': async (p) => {
