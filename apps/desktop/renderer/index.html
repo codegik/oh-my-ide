@@ -66,14 +66,16 @@
   .railtop { display:flex; align-items:center; width:var(--rail); flex:none;
              padding:0 10px; border-right:1px solid var(--line); }
   .railtop button { flex:1; }
-  /* The one way in to new work, so it wears the primary-action colour the
-     new-track sheet's own confirm button uses, not the quiet grey of the rest. */
-  .railtop button { background:var(--ON_ME); color:#1a1006; border:1px solid var(--ON_ME);
+  /* The one way in to new work, so it carries the primary-action colour, not
+     the quiet grey of the rest. Tinted rather than filled: a solid slab of it
+     was the loudest thing on screen, louder than the rows that need you. */
+  .railtop button { background:rgba(255,122,89,.12); color:var(--ON_ME);
+                    border:1px solid rgba(255,122,89,.45);
                     border-radius:5px; padding:4px 10px; cursor:pointer; font:inherit;
                     font-size:var(--fs-s); font-weight:600; white-space:nowrap;
                     overflow:hidden; text-overflow:ellipsis; }
-  .railtop button:hover { filter:brightness(1.12); }
-  .railtop button:active { filter:brightness(.92); }
+  .railtop button:hover { background:rgba(255,122,89,.22); border-color:var(--ON_ME); }
+  .railtop button:active { background:rgba(255,122,89,.3); }
   .railtop button:focus-visible { outline:2px solid var(--text); outline-offset:2px; }
   .group { margin-top:10px; }
   .ghead { display:flex; justify-content:space-between; padding:3px 12px; color:var(--dim);
