@@ -66,8 +66,15 @@
   .railtop { display:flex; align-items:center; width:var(--rail); flex:none;
              padding:0 10px; border-right:1px solid var(--line); }
   .railtop button { flex:1; }
-  .railtop button { background:#1d2230; color:var(--text); border:1px solid var(--line);
-                    border-radius:5px; padding:4px 10px; cursor:pointer; font:inherit; font-size:var(--fs-s); }
+  /* The one way in to new work, so it wears the primary-action colour the
+     new-track sheet's own confirm button uses, not the quiet grey of the rest. */
+  .railtop button { background:var(--ON_ME); color:#1a1006; border:1px solid var(--ON_ME);
+                    border-radius:5px; padding:4px 10px; cursor:pointer; font:inherit;
+                    font-size:var(--fs-s); font-weight:600; white-space:nowrap;
+                    overflow:hidden; text-overflow:ellipsis; }
+  .railtop button:hover { filter:brightness(1.12); }
+  .railtop button:active { filter:brightness(.92); }
+  .railtop button:focus-visible { outline:2px solid var(--text); outline-offset:2px; }
   .group { margin-top:10px; }
   .ghead { display:flex; justify-content:space-between; padding:3px 12px; color:var(--dim);
            font-size:var(--fs-xs); letter-spacing:.8px; }
@@ -333,7 +340,7 @@
 </head>
 <body>
   <header>
-    <div class="railtop"><button type="button" id="new" title="new track (Ctrl+N)">+ track</button></div>
+    <div class="railtop"><button type="button" id="new" title="new track (Ctrl+N)">+ new track</button></div>
     <div id="tabs" class="tabscroll"></div>
     <button type="button" id="tabsmore" class="tabmore" hidden title="all open tracks">▾</button>
   </header>
