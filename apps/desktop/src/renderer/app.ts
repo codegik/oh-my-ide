@@ -403,7 +403,11 @@ function renderRail() {
       ? '<div class="empty">No tracks yet.<br><br>Press <b>+ track</b> to make one.</div>' + done
       : `<div class="railhead">
          <span>${tracks.length} open</span>
-         ${needs > 0 ? `<span class="needs">${needs} need${needs === 1 ? 's' : ''} you</span>` : ''}
+         ${
+           needs > 0
+             ? `<button class="needs" id="needsjump" title="go to what is waiting on you">${needs} need${needs === 1 ? 's' : ''} you</button>`
+             : ''
+         }
        </div>
        ${tracks.map((t) => railRow(t)).join('')}
        ${done}`;
@@ -423,6 +427,43 @@ function renderRail() {
   };
   const arch = document.getElementById('archivedopen');
   if (arch) arch.onclick = () => openArchiveSheet();
+  const jump = document.getElementById('needsjump');
+  if (jump) jump.onclick = () => jumpToNeedsYou();
+}
+
+/**
+ * "N needs you" is a way in, not just a count: a click lands on the track that
+ * is waiting, on the session doing the asking. With several waiting, each click
+ * moves on to the next, in rail order, so repeated clicks walk through them all.
+ *
+ * A track can be ON ME with no session asking — a failing PR, say. Then the
+ * track alone is the stop, and it keeps whichever session it was showing.
+ */
+function jumpToNeedsYou() {
+  const stops: { t: Track; sid?: string }[] = [];
+  for (const t of tracks) {
+    if (t.court !== 'ON_ME') continue;
+    const asking = sessionRefsOf(t).filter(
+      (r) => STATE_COURT[r.state ?? liveSession(r)?.state ?? ''] === 'ON_ME',
+    );
+    if (asking.length === 0) stops.push({ t });
+    for (const r of asking) stops.push({ t, sid: r.externalId });
+  }
+  if (stops.length === 0) return;
+
+  // Start from where you are, so the first click never lands on the screen you
+  // are already looking at when something else is waiting.
+  const cur = activeTab === null ? undefined : trackById(activeTab);
+  const curSid = cur ? currentSession(cur)?.externalId : undefined;
+  const at = stops.findIndex(
+    (s) => s.t.id === activeTab && (s.sid === undefined || s.sid === curSid),
+  );
+  const next = stops[(at + 1) % stops.length] as (typeof stops)[number];
+
+  if (next.sid) activeSession[next.t.id] = next.sid;
+  openTrack(next.t.id);
+  document.querySelector('.titem.sel')?.scrollIntoView({ block: 'nearest' });
+  document.querySelector('.sess.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 /**
