@@ -489,6 +489,19 @@ function wireTabStrip(scroller: HTMLElement, more: HTMLButtonElement, itemSel: s
     scroller.scrollLeft += e.deltaY;
   };
   scroller.onscroll = sync;
+  // Middle click closes a tab, as in a browser: it does whatever its × does, so
+  // a tab without one (a session still holding refs) stays put.
+  scroller.onmousedown = (e) => {
+    // Otherwise Linux starts autoscroll or pastes the primary selection.
+    if (e.button === 1) e.preventDefault();
+  };
+  scroller.onauxclick = (e) => {
+    if (e.button !== 1) return;
+    const x = (e.target as HTMLElement).closest(itemSel)?.querySelector<HTMLElement>('.x');
+    if (!x) return;
+    e.preventDefault();
+    x.click();
+  };
   more.onclick = (e) => {
     e.stopPropagation();
     toggleTabMenu(more, scroller, itemSel);
