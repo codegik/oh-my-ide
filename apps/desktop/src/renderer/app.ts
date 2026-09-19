@@ -732,6 +732,17 @@ function buildDetail(id: number) {
     await refresh();
   };
 
+  $('usage').onclick = async (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLElement>('.sid');
+    const id = btn?.dataset.id;
+    if (!btn || !id) return;
+    await navigator.clipboard.writeText(id);
+    btn.textContent = 'copied';
+    setTimeout(() => {
+      if (btn.isConnected && btn.textContent === 'copied') btn.textContent = id;
+    }, 900);
+  };
+
   // The drawer covers the right end of the term bar, so it cannot rely on the
   // button that opened it: it closes from inside, or with Escape.
   $('sideclose').onclick = () => {
@@ -1157,7 +1168,9 @@ function patchUsage(t: Track, session: Ref | undefined) {
       if (!m || m.trackId !== t.id || el.dataset.sid !== sid || !el.isConnected) return;
       const row = (k: string, v: string, tip = '') =>
         `<div class="kv" ${tip ? `title="${esc(tip)}"` : ''}><span class="rk">${k}</span><span class="kvv">${v}</span></div>`;
-      let html = '<div class="shead">SESSION</div>';
+      // The id the CLI resumes by: the live one, since /clear moves a session on.
+      const id = live?.sessionId ?? stored;
+      let html = `<div class="shead"><span class="rk">SESSION</span><button type="button" class="sid" data-id="${esc(id)}" title="${esc(id)} — click to copy">${esc(id)}</button></div>`;
       if (!u || u.requests === 0) {
         html += '<div class="muted pad">nothing spent yet</div>';
       } else {
