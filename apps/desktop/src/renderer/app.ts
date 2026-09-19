@@ -733,13 +733,13 @@ function buildDetail(id: number) {
   };
 
   $('usage').onclick = async (e) => {
-    const btn = (e.target as HTMLElement).closest<HTMLElement>('.sid');
-    const id = btn?.dataset.id;
-    if (!btn || !id) return;
-    await navigator.clipboard.writeText(id);
+    const btn = (e.target as HTMLElement).closest<HTMLElement>('.copy');
+    const v = btn?.dataset.copy;
+    if (!btn || !v) return;
+    await navigator.clipboard.writeText(v);
     btn.textContent = 'copied';
     setTimeout(() => {
-      if (btn.isConnected && btn.textContent === 'copied') btn.textContent = id;
+      if (btn.isConnected && btn.textContent === 'copied') btn.textContent = v;
     }, 900);
   };
 
@@ -1166,11 +1166,13 @@ function patchUsage(t: Track, session: Ref | undefined) {
     .then((u: any) => {
       const m = mounted;
       if (!m || m.trackId !== t.id || el.dataset.sid !== sid || !el.isConnected) return;
+      const copy = (v: string) =>
+        `<button type="button" class="copy" data-copy="${esc(v)}" title="${esc(v)} — click to copy">${esc(v)}</button>`;
       const row = (k: string, v: string, tip = '') =>
         `<div class="kv" ${tip ? `title="${esc(tip)}"` : ''}><span class="rk">${k}</span><span class="kvv">${v}</span></div>`;
       // The id the CLI resumes by: the live one, since /clear moves a session on.
       const id = live?.sessionId ?? stored;
-      let html = `<div class="shead"><span class="rk">SESSION</span><button type="button" class="sid" data-id="${esc(id)}" title="${esc(id)} — click to copy">${esc(id)}</button></div>`;
+      let html = `<div class="shead"><span class="rk">SESSION</span>${copy(id)}</div>`;
       if (!u || u.requests === 0) {
         html += '<div class="muted pad">nothing spent yet</div>';
       } else {
@@ -1194,7 +1196,7 @@ function patchUsage(t: Track, session: Ref | undefined) {
               "from the transcript: the CLI's own side requests (titles, classifiers) are not in it",
           ) +
           (u.gitBranch
-            ? row('branch', esc(u.gitBranch === 'HEAD' ? 'detached' : u.gitBranch))
+            ? row('branch', u.gitBranch === 'HEAD' ? 'detached' : copy(u.gitBranch))
             : '');
       }
       if (m.sig.usage === html) return;

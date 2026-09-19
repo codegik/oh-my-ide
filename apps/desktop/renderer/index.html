@@ -181,12 +181,14 @@
   .sideclose:hover { border-color:var(--dim); color:#ff8f75; }
   .side { overflow:auto; display:flex; flex-direction:column; }
   .shead { padding:9px 12px 4px; color:var(--dim); font-size:var(--fs-xs); letter-spacing:.8px; }
-  /* The session id beside its heading, in the value column: cut to the drawer's width, copied on click like the folder. */
+  /* The session id beside its heading, in the value column, and the branch: cut to the
+     drawer's width, copied on click like the folder. */
   .usage .shead { display:flex; align-items:baseline; gap:6px; }
-  .sid { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left;
-         background:transparent; border:0; padding:0; color:var(--dim); cursor:pointer;
-         font:inherit; letter-spacing:0; }
-  .sid:hover { color:var(--text); }
+  .copy { display:block; min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+          text-align:left; background:transparent; border:0; padding:0; color:inherit; cursor:pointer;
+          font:inherit; letter-spacing:0; }
+  .copy:hover { color:var(--text); }
+  .shead .copy { flex:1; }
   /* A full-width rule and extra air so NOTES reads as its own section, not more refs. */
   .snotes { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
   /* The session's spend, above its refs, closed off by the same rule NOTES uses. */
