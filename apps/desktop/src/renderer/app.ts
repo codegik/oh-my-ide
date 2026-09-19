@@ -170,7 +170,15 @@ function loadTabs() {
  */
 const terms = new Map<
   string,
-  { term: Terminal; fit: FitAddon; el: HTMLDivElement; expect: bigint; epoch: number }
+  {
+    term: Terminal;
+    fit: FitAddon;
+    el: HTMLDivElement;
+    expect: bigint;
+    epoch: number;
+    /** The "attaching" cover, until the first bytes arrive. */
+    wait: HTMLElement | null;
+  }
 >();
 
 /**
@@ -222,6 +230,13 @@ function termFor(viewId: string) {
   const el = document.createElement('div');
   el.className = 'termhost';
   term.open(el);
+  // Attaching takes a moment, and a blank grid meanwhile reads as a dead
+  // terminal. The first output from the session takes this down.
+  const wait = document.createElement('div');
+  wait.className = 'termwait';
+  wait.setAttribute('role', 'status');
+  wait.innerHTML = '<span class="spin"></span> attaching to the session…';
+  el.appendChild(wait);
   term.onData((data) => window.omi.ptyInput(viewId, new TextEncoder().encode(data)));
 
   /**
@@ -256,7 +271,7 @@ function termFor(viewId: string) {
 
   // resize alone is not enough: the terminal also changes size when the layout
   // does (tab switch, side panel, font load) with the window standing still.
-  t = { term, fit, el, expect: -1n, epoch: 0 };
+  t = { term, fit, el, expect: -1n, epoch: 0, wait };
   new ResizeObserver(() => scheduleFit(viewId)).observe(el);
   terms.set(viewId, t);
   return t;
@@ -265,6 +280,8 @@ function termFor(viewId: string) {
 window.omi.onPty((viewId, epoch, offset, bytes) => {
   const t = terms.get(viewId);
   if (!t) return;
+  t.wait?.remove();
+  t.wait = null;
   const off = BigInt(offset);
   if (epoch !== t.epoch) {
     t.term.reset();
@@ -1482,7 +1499,8 @@ function renderDetail() {
   const t = activeTab === null ? undefined : trackById(activeTab);
   const host = $('detail');
   if (!t) {
-    if (mounted) {
+    // `mounted` is null at launch too, when the pane still says it is loading.
+    if (mounted || host.querySelector('[data-loading]')) {
       host.innerHTML = '<div class="empty">Open a track from the list, or create one.</div>';
       mounted = null;
     }
@@ -2297,6 +2315,8 @@ async function openPty(shortId: string, viewId: string, cwd: string | null) {
       .catch(() => {});
   } catch (err) {
     openedPtys.delete(viewId);
+    t.wait?.remove();
+    t.wait = null;
     t.term.writeln(`\r\n\x1b[31mcould not attach: ${String((err as Error).message)}\x1b[0m`);
   }
 }
@@ -2564,7 +2584,15 @@ async function boot() {
   window.addEventListener('keydown', onShortcutKey, true);
 
   // Load tracks BEFORE restoring tabs: the restore filters against them.
-  await refresh();
+  try {
+    await refresh();
+  } catch (err) {
+    // Otherwise the loading spinners would spin on forever.
+    $('railbody').innerHTML =
+      `<div class="empty" role="alert">Could not load tracks.<br><br>${esc((err as Error).message)}</div>`;
+    $('detail').innerHTML = '';
+    throw err;
+  }
 
   loadTabs();
   // Drop tabs whose track has since been closed or deleted.
