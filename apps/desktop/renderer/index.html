@@ -71,9 +71,11 @@
   .group { margin-top:10px; }
   .ghead { display:flex; justify-content:space-between; padding:3px 12px; color:var(--dim);
            font-size:var(--fs-xs); letter-spacing:.8px; }
-  /* One flat list: a count, and how much of it is actually asking for you. */
-  .railhead { display:flex; justify-content:space-between; padding:8px 12px 3px;
-              color:var(--dim); font-size:var(--fs-xs); letter-spacing:.8px; }
+  /* One flat list: a count, and how much of it is actually asking for you. Too
+     narrow for both, they stack rather than either one breaking mid-phrase. */
+  .railhead { display:flex; flex-wrap:wrap; justify-content:space-between; column-gap:8px;
+              padding:8px 12px 3px; color:var(--dim); font-size:var(--fs-xs); letter-spacing:.8px; }
+  .railhead > * { white-space:nowrap; }
   .railhead .needs { padding:0; background:none; border:none; color:var(--ON_ME); font:inherit;
                     letter-spacing:inherit; cursor:pointer; }
   .railhead .needs:hover, .railhead .needs:focus-visible { text-decoration:underline; }
