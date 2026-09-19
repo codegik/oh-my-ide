@@ -161,6 +161,11 @@
   .shead { padding:9px 12px 4px; color:var(--dim); font-size:var(--fs-xs); letter-spacing:.8px; }
   /* A full-width rule and extra air so NOTES reads as its own section, not more refs. */
   .snotes { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
+  /* The session's spend, above its refs, closed off by the same rule NOTES uses. */
+  .usage { padding-bottom:8px; margin-bottom:4px; border-bottom:1px solid var(--line); }
+  .usage:empty { display:none; }
+  .kv { display:flex; align-items:baseline; gap:6px; padding:1px 12px; font-size:var(--fs-s); }
+  .kvv { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .ref { display:flex; align-items:center; gap:6px; padding:4px 12px; font-size:var(--fs-s); }
   .ref:hover { background:#1a1e29; }
   .rk { color:var(--dim); min-width:88px; font-size:var(--fs-xs); }
