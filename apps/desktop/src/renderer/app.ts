@@ -962,7 +962,7 @@ function patchSide(t: Track, session: Ref | undefined) {
       ${refs.map(refRow).join('')}
     </div>`;
 
-  for (const el of document.querySelectorAll<HTMLElement>('.go')) {
+  for (const el of document.querySelectorAll<HTMLElement>('#refs .go')) {
     el.onclick = () => window.omi.openExternal(el.dataset.url as string);
   }
   for (const el of document.querySelectorAll<HTMLElement>('.rm')) {
@@ -1048,7 +1048,7 @@ function mountTerminal(t: Track, session: Ref | undefined) {
       <b>${esc(session.label ?? '')}</b> is no longer running.<br><br>
       Its transcript is kept, so it can pick up where it left off.
       <div class="deadacts">
-        <button class="wbtn go" id="resumesess">resume</button>
+        <button class="wbtn primary" id="resumesess">resume</button>
         ${
           holds > 0
             ? `<button class="wbtn" id="freshsess"
@@ -1502,7 +1502,7 @@ function renderWizard() {
       ${w.busy ? `<div class="wbusy">${esc(w.busy)}</div>` : ''}
       <div class="wacts">
         <button type="button" id="wcancel" class="wbtn">cancel</button>
-        <button type="submit" class="wbtn go" ${w.busy ? 'disabled' : ''}>create track</button>
+        <button type="submit" class="wbtn primary" ${w.busy ? 'disabled' : ''}>create track</button>
       </div>
     </form>`;
 
@@ -1689,7 +1689,7 @@ function renderAttachSheet() {
       }
       <div class="wacts">
         <button type="button" id="acancel" class="wbtn">cancel</button>
-        <button type="submit" class="wbtn go" ${a.busy ? 'disabled' : ''}>attach</button>
+        <button type="submit" class="wbtn primary" ${a.busy ? 'disabled' : ''}>attach</button>
       </div>
     </form>`;
 
