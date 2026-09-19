@@ -1051,14 +1051,6 @@ function patchUsage(t: Track, session: Ref | undefined) {
             `fresh ${u.inputTokens.toLocaleString()} · cache read ${u.cacheReadTokens.toLocaleString()} · cache write ${u.cacheWriteTokens.toLocaleString()}\n` +
               "from the transcript: the CLI's own side requests (titles, classifiers) are not in it",
           ) +
-          (u.subagents > 0
-            ? row(
-                'subagents',
-                `${u.subagents} <span class="muted">· ${fmtTokens(u.subagentTokens)}</span>`,
-                'already counted in the totals above',
-              )
-            : '') +
-          (u.model ? row('model', esc(String(u.model).replace(/^claude-/, ''))) : '') +
           (u.gitBranch
             ? row('branch', esc(u.gitBranch === 'HEAD' ? 'detached' : u.gitBranch))
             : '');
