@@ -192,7 +192,7 @@
   #modal[hidden] { display:none; }
   .sheet { width:min(560px, 92vw); max-height:80vh; overflow:auto; background:var(--panel);
            border:1px solid var(--line); border-radius:10px; padding:16px 18px;
-           box-shadow:0 24px 70px rgba(0,0,0,.65); }
+           box-shadow:0 24px 70px rgba(0,0,0,.65); display:flex; flex-direction:column; }
   .whead { font-size:var(--fs-xs); letter-spacing:1px; color:var(--dim); margin-bottom:12px; }
   .wlab { display:block; margin:12px 0 5px; font-size:var(--fs-xs); color:var(--dim); letter-spacing:.6px; }
   .sheet input[type=text], .sheet input:not([type]) { width:100%; background:#0b0d12; border:1px solid var(--line);
@@ -222,6 +222,10 @@
   .wbtn:disabled { opacity:.6; cursor:default; }
   .wlink { display:block; margin-top:8px; background:none; border:none; padding:0; cursor:pointer;
            color:var(--ON_CLAUDE); font:inherit; font-size:var(--fs-xs); text-align:left; }
+  /* the sheet is a column: a long session list scrolls inside itself, the buttons stay in view */
+  .sheet > *, .sheet > .wpath { flex:none; }
+  .sheet > .wsess { flex:0 1 auto; min-height:90px; overflow:auto; }
+  .wsearch { margin:10px 0 8px; }
   /* archive sheet: the search stays put while the list under it scrolls */
   .alist { margin-top:10px; max-height:52vh; overflow:auto; }
   .arow { display:flex; align-items:center; gap:10px; padding:6px 7px; border-radius:5px; }

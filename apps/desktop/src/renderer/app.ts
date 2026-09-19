@@ -1624,11 +1624,21 @@ let attachSheet: {
   busy: boolean;
   past: any[];
   pastLoading: boolean;
+  query: string;
 } | null = null;
 
 function openAttachSheet(trackId: number) {
   archiveSheet = null;
-  attachSheet = { trackId, picked: new Set(), all: false, busy: false, past: [], pastLoading: true };
+  attachSheet = {
+    trackId,
+    picked: new Set(),
+    all: false,
+    busy: false,
+    past: [],
+    pastLoading: true,
+    query: '',
+  };
+  $('modal').innerHTML = ''; // a sheet left up for another track must be rebuilt, not patched
   renderModal();
   const cwd = tracks.find((x) => x.id === trackId)?.cwd ?? null;
   void fetchPast(cwd).then((rows) => {
@@ -1639,6 +1649,11 @@ function openAttachSheet(trackId: number) {
   });
 }
 
+/**
+ * Built once per open, then only the list is patched — same as the archive
+ * sheet. Sessions refresh under the sheet, and rebuilding it would replace the
+ * search box under the caret.
+ */
 function renderAttachSheet() {
   const a = attachSheet;
   if (!a) return;
@@ -1647,6 +1662,62 @@ function renderAttachSheet() {
     closeModal();
     return;
   }
+  const host = $('modal');
+  host.hidden = false;
+  if (document.getElementById('att')) {
+    patchAttachList();
+    return;
+  }
+
+  host.innerHTML = `
+    <form class="sheet" id="att">
+      <div class="whead">ATTACH A SESSION</div>
+      <div class="wpath">${t.cwd ? esc(t.cwd) : '<span class="muted">this track has no folder — showing everything</span>'}</div>
+      <input id="atsearch" class="wsearch" value="${esc(a.query)}" placeholder="search sessions…"
+             aria-label="search sessions" autocomplete="off" spellcheck="false" />
+      <div class="wsess" id="atlist"></div>
+      <div id="atmore"></div>
+      <div class="wacts">
+        <button type="button" id="acancel" class="wbtn">cancel</button>
+        <button type="submit" id="atsubmit" class="wbtn primary">attach</button>
+      </div>
+    </form>`;
+
+  const search = $<HTMLInputElement>('atsearch');
+  search.oninput = () => {
+    if (!attachSheet) return;
+    attachSheet.query = search.value;
+    patchAttachList();
+  };
+  // Enter in the search box filters; it must not submit an empty pick and close.
+  search.onkeydown = (e) => {
+    if (e.key === 'Enter') e.preventDefault();
+  };
+  $('acancel').onclick = () => closeModal();
+  $<HTMLFormElement>('att').onsubmit = async (e) => {
+    e.preventDefault();
+    if (!attachSheet || attachSheet.busy) return;
+    attachSheet.busy = true;
+    patchAttachList();
+    const first = [...attachSheet.picked][0];
+    for (const sessionId of attachSheet.picked) {
+      await window.omi.rpc('tracks.attachSession', { id: a.trackId, sessionId }).catch(() => {});
+    }
+    if (first) activeSession[a.trackId] = `claude:${first}`;
+    saveTabs();
+    closeModal();
+    await refresh();
+  };
+  patchAttachList();
+  search.focus();
+}
+
+/** Case-insensitive across whatever a row shows: name, id, state, branch, folder. */
+function patchAttachList() {
+  const a = attachSheet;
+  const list = document.getElementById('atlist');
+  const t = a ? tracks.find((x) => x.id === a.trackId) : undefined;
+  if (!a || !list || !t) return;
 
   const linked = new Set(
     sessionRefsOf(t)
@@ -1662,51 +1733,44 @@ function renderAttachSheet() {
   // bigger feature than "attach one that ran here before".
   const freePast = a.past.filter((p) => !linkedIds.has(p.sessionId));
 
-  $('modal').hidden = false;
-  $('modal').innerHTML = `
-    <form class="sheet" id="att">
-      <div class="whead">ATTACH A SESSION</div>
-      <div class="wpath">${t.cwd ? esc(t.cwd) : '<span class="muted">this track has no folder — showing everything</span>'}</div>
-      <div class="wsess">
-        ${free.length === 0 && freePast.length === 0 ? '<div class="muted pad">nothing left to attach here</div>' : ''}
-        ${free
-          .map((s) => {
-            const bg = s.kind === 'background';
-            return `<label class="wopt ${bg ? '' : 'off'}">
-            <input type="checkbox" data-sess="${esc(s.sessionId)}" ${bg ? '' : 'disabled'}
-                   ${a.picked.has(s.sessionId) ? 'checked' : ''} />
-            <span class="dot ${STATE_COURT[s.state] ?? 'PARKED'}"></span>
-            <span class="wname">${esc(s.name ?? s.shortId)}</span>
-            <span class="sstate">${esc(s.state)}${bg ? '' : ' · interactive, cannot attach'}</span>
-          </label>`;
-          })
-          .join('')}
-        ${a.pastLoading ? '<div class="muted pad">looking for past sessions…</div>' : ''}
-        ${freePast.length > 0 ? '<div class="wsub">past sessions here</div>' : ''}
-        ${freePast
-          .map(
-            (s) => `
-          <label class="wopt past">
-            <input type="checkbox" data-sess="${esc(s.sessionId)}" ${a.picked.has(s.sessionId) ? 'checked' : ''} />
-            <span class="dot PARKED"></span>
-            <span class="wname">${esc(s.preview ?? s.shortId)}</span>
-            <span class="sstate">${s.gitBranch ? `${esc(s.gitBranch)} · ` : ''}last active ${ago(s.lastActivityAt)} ago</span>
-          </label>`,
-          )
-          .join('')}
-      </div>
-      ${
-        hiddenByFolder > 0 && !a.all
-          ? `<button type="button" id="aall" class="wlink">show ${hiddenByFolder} session(s) from other folders</button>`
-          : ''
-      }
-      <div class="wacts">
-        <button type="button" id="acancel" class="wbtn">cancel</button>
-        <button type="submit" class="wbtn primary" ${a.busy ? 'disabled' : ''}>attach</button>
-      </div>
-    </form>`;
+  const q = a.query.trim().toLowerCase();
+  const hit = (...fields: unknown[]) =>
+    !q || fields.some((f) => typeof f === 'string' && f.toLowerCase().includes(q));
+  const shown = free.filter((s) => hit(s.name, s.shortId, s.sessionId, s.state, s.cwd));
+  const shownPast = freePast.filter((s) => hit(s.preview, s.shortId, s.sessionId, s.gitBranch));
+  const nothing = free.length === 0 && freePast.length === 0;
+  const noMatch = !nothing && !!q && shown.length === 0 && shownPast.length === 0;
 
-  for (const b of document.querySelectorAll<HTMLInputElement>('[data-sess]')) {
+  list.innerHTML = `
+    ${nothing && !a.pastLoading ? '<div class="muted pad">nothing left to attach here</div>' : ''}
+    ${noMatch && !a.pastLoading ? `<div class="muted pad">no session matches “${esc(a.query.trim())}”</div>` : ''}
+    ${shown
+      .map((s) => {
+        const bg = s.kind === 'background';
+        return `<label class="wopt ${bg ? '' : 'off'}">
+        <input type="checkbox" data-sess="${esc(s.sessionId)}" ${bg ? '' : 'disabled'}
+               ${a.picked.has(s.sessionId) ? 'checked' : ''} />
+        <span class="dot ${STATE_COURT[s.state] ?? 'PARKED'}"></span>
+        <span class="wname">${esc(s.name ?? s.shortId)}</span>
+        <span class="sstate">${esc(s.state)}${bg ? '' : ' · interactive, cannot attach'}</span>
+      </label>`;
+      })
+      .join('')}
+    ${a.pastLoading ? '<div class="muted pad">looking for past sessions…</div>' : ''}
+    ${shownPast.length > 0 ? '<div class="wsub">past sessions here</div>' : ''}
+    ${shownPast
+      .map(
+        (s) => `
+      <label class="wopt past">
+        <input type="checkbox" data-sess="${esc(s.sessionId)}" ${a.picked.has(s.sessionId) ? 'checked' : ''} />
+        <span class="dot PARKED"></span>
+        <span class="wname" title="${esc(s.preview ?? s.shortId)}">${esc(s.preview ?? s.shortId)}</span>
+        <span class="sstate">${s.gitBranch ? `${esc(s.gitBranch)} · ` : ''}last active ${ago(s.lastActivityAt)} ago</span>
+      </label>`,
+      )
+      .join('')}`;
+
+  for (const b of list.querySelectorAll<HTMLInputElement>('[data-sess]')) {
     b.onchange = () => {
       if (!attachSheet) return;
       const id = String(b.dataset.sess);
@@ -1714,28 +1778,20 @@ function renderAttachSheet() {
       else attachSheet.picked.delete(id);
     };
   }
+
+  $('atmore').innerHTML =
+    hiddenByFolder > 0 && !a.all
+      ? `<button type="button" id="aall" class="wlink">show ${hiddenByFolder} session(s) from other folders</button>`
+      : '';
   const all = document.getElementById('aall');
   if (all)
     all.onclick = () => {
       if (attachSheet) {
         attachSheet.all = true;
-        renderModal();
+        patchAttachList();
       }
     };
-  $('acancel').onclick = () => closeModal();
-  $<HTMLFormElement>('att').onsubmit = async (e) => {
-    e.preventDefault();
-    if (!attachSheet || attachSheet.busy) return;
-    attachSheet.busy = true;
-    const first = [...attachSheet.picked][0];
-    for (const sessionId of attachSheet.picked) {
-      await window.omi.rpc('tracks.attachSession', { id: a.trackId, sessionId }).catch(() => {});
-    }
-    if (first) activeSession[a.trackId] = `claude:${first}`;
-    saveTabs();
-    closeModal();
-    await refresh();
-  };
+  $<HTMLButtonElement>('atsubmit').disabled = a.busy;
 }
 
 // ── archived tracks ─────────────────────────────────────────────────────────
