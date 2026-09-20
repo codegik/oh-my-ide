@@ -75,6 +75,9 @@ packaging/
   linux/           /usr/bin/oh-my-ide launcher and the .desktop entry
   aur/             oh-my-ide-bin PKGBUILD; built for our pacman repo, and for the
                    AUR once it takes new accounts (see RELEASING.md)
+start.sh           run the app (and stop/status/doctor/install).
+test.sh            every check there is, from a clean clone.
+release.sh         cut a release; also owns the PGP key that signs packages.
 ```
 
 ### Architectural spine

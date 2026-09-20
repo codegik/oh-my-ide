@@ -1,5 +1,7 @@
 # Releasing
 
+`./release.sh 0.2.0` does all of this. The rest of this page is what it does and why.
+
 A release is a git tag. Pushing `vX.Y.Z` runs [`.github/workflows/release.yml`](../.github/workflows/release.yml),
 which:
 
@@ -47,6 +49,18 @@ step starts running. Nothing else changes: both channels build the same PKGBUILD
 ## Cutting a release
 
 ```sh
+./release.sh doctor        # is everything in place?
+./release.sh 0.2.0         # test, bump, commit, tag, push
+```
+
+`release.sh` cuts only from a clean `main` that matches `origin/main`, runs `./test.sh`
+first (`--no-test` skips it), and prints what it is about to do before it pushes anything.
+It also says up front if `PACKAGE_GPG_PRIVATE_KEY` is missing, rather than leaving you to
+find the skipped repo step in a log afterwards. Everything past the push is the workflow.
+
+By hand it is the same four steps:
+
+```sh
 # bump "version" in the root package.json, then:
 git commit -am "Release 0.2.0"
 git tag v0.2.0
@@ -62,21 +76,33 @@ built; bumping it by hand would only matter in the AUR, where users rebuild.
 ### The signing key
 
 pacman's default `RemoteFileSigLevel` is `Required`, so an unsigned package is one nobody
-can install over the network. The repo step is skipped with a warning until this exists;
-the GitHub release and the attached `.pkg.tar.zst` still go out.
+can install over the network. Until the secret exists the repo step is skipped with a
+warning; the GitHub release and the attached `.pkg.tar.zst` still go out.
 
-1. A key used for nothing else, with no passphrase, because CI cannot type one:
-   ```sh
-   gpg --quick-gen-key 'oh-my-ide packaging <you@example.com>' ed25519 sign never
-   ```
-2. The private half as a repo secret:
-   ```sh
-   gpg --armor --export-secret-keys 'oh-my-ide packaging' | gh secret set PACKAGE_GPG_PRIVATE_KEY
-   ```
+```sh
+./release.sh key new
+```
 
-The workflow exports the public half to the repo as `oh-my-ide.pub` on every release, so
-users import it by URL. Keep the private key: replacing it means every user has to
-`pacman-key --lsign-key` the new one before their next upgrade works.
+That makes a sign-only ed25519 key — no expiry, because an expired key breaks every
+user's upgrade rather than just the next release, and no passphrase, because CI cannot
+type one — in `~/.local/share/oh-my-ide/packaging-gnupg`, and sets
+`PACKAGE_GPG_PRIVATE_KEY` from it. The keyring is the key's only home besides that
+secret, so back it up before you do anything else:
+
+```sh
+./release.sh key backup ~/somewhere-safe/oh-my-ide-packaging.asc
+```
+
+| | |
+|---|---|
+| `./release.sh key` | fingerprint, uid, and whether CI holds it |
+| `./release.sh key public` | the public key users import (the workflow publishes this as `oh-my-ide.pub` on every release) |
+| `./release.sh key backup <file>` | the private key, armoured, mode 600 |
+| `./release.sh key rotate` | replace it — asks twice, and see below |
+
+Keep the key. Rotating it is not a release detail: every existing install trusts the old
+one, so until each user runs `pacman-key --add` and `--lsign-key` again, their next
+`pacman -Syu` fails on a signature it cannot verify. Rotate only if the key leaked.
 
 ### When the AUR reopens
 
