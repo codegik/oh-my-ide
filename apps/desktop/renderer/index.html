@@ -113,7 +113,23 @@
               color:var(--dim); font:inherit; font-size:var(--fs-xs); letter-spacing:.4px;
               text-align:left; cursor:pointer; }
   .archlink:hover { color:var(--text); }
-  .tname { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--fs-s); }
+  /* Both the name and its tiebreaker shrink from their own width, never from
+     zero: with flex:1 the name collapsed to "l…" beside a long suffix, which is
+     the opposite of the point. Sized this way the longer of the two — almost
+     always the suffix — gives up the characters. */
+  .tname { flex:1 1 auto; min-width:5ch; overflow:hidden; text-overflow:ellipsis;
+           white-space:nowrap; font-size:var(--fs-s); }
+  /* Only on the rows whose name is not unique — which folder, which session, or
+     the track's own id. See disambiguate() in the renderer. Dimmer than the
+     name, and the first to give up characters when the row is too narrow for
+     both: it is the tiebreaker, not the label. */
+  .tdis { flex:0 4 auto; min-width:4ch; max-width:50%; overflow:hidden; text-overflow:ellipsis;
+          white-space:nowrap; color:var(--dim); font-size:var(--fs-xs); }
+  .tdis::before { content:"· "; }
+  /* Renaming happens in the row itself, so the list never moves under you. */
+  .tedit { flex:1; min-width:0; padding:0 5px; background:var(--bg); color:var(--text);
+           border:1px solid var(--ON_ME); border-radius:4px; font:inherit; font-size:var(--fs-s); }
+  .tedit:focus { outline:none; }
   .tago { color:var(--dim); font-size:var(--fs-xs); }
   .dot { width:8px; height:8px; border-radius:50%; flex:none; background:var(--PARKED); }
   .dot.ON_ME{background:var(--ON_ME)} .dot.ON_CLAUDE{background:var(--ON_CLAUDE)}

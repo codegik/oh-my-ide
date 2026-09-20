@@ -371,11 +371,75 @@ const ICON_ARCHIVE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
   <rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/></svg>`;
 
+/**
+ * What a row shows after its name when the name alone is not enough. Two tracks
+ * opened on the same folder are both named after it — see createFromWizard —
+ * and the rail then prints the same word twice with nothing to choose between.
+ */
+interface Suffix {
+  text: string;
+  tip: string;
+}
+
+/** Where it is: the folder above the one they share a name with. */
+const parentSuffix = (t: Track): Suffix | null => {
+  const parts = (t.cwd ?? '').replace(/\/+$/, '').split('/').filter(Boolean);
+  const parent = parts[parts.length - 2];
+  return parent && t.cwd ? { text: parent, tip: t.cwd } : null;
+};
+
+/** What is running in it: the name its session took from the first prompt. */
+const sessionSuffix = (t: Track): Suffix | null => {
+  for (const r of sessionRefsOf(t)) {
+    const label = r.label?.trim();
+    if (!label || label === shortIdOf(sessionIdOf(r))) continue;
+    return { text: label, tip: `session: ${label}` };
+  }
+  return null;
+};
+
+/** The last resort, and the only one that cannot fail to differ. */
+const idSuffix = (t: Track): Suffix => ({ text: `#${t.id}`, tip: `track #${t.id}` });
+
+/**
+ * Suffixes for the rows that need one, and only those: a list where every row
+ * carries an extra word is harder to read than one where two rows do.
+ *
+ * A group of same-named tracks is handed the first thing that tells ALL of them
+ * apart, so the suffixes inside a group are always the same kind of fact — half
+ * a group labelled by folder and half by session would read as two lists.
+ */
+function disambiguate(rows: Track[]): Map<number, Suffix> {
+  const out = new Map<number, Suffix>();
+  const groups = new Map<string, Track[]>();
+  for (const t of rows) {
+    const key = t.title.trim().toLowerCase();
+    const g = groups.get(key);
+    if (g) g.push(t);
+    else groups.set(key, [t]);
+  }
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    for (const pick of [parentSuffix, sessionSuffix, idSuffix]) {
+      const vals = group.map(pick);
+      if (vals.some((v) => !v)) continue;
+      // A suffix that repeats inside the group is a second thing to read that
+      // still says nothing; move on to one that does.
+      if (new Set(vals.map((v) => (v as Suffix).text)).size !== group.length) continue;
+      for (const [i, t] of group.entries()) out.set(t.id, vals[i] as Suffix);
+      break;
+    }
+  }
+  return out;
+}
+
 /** A finished row swaps its age for an archive button on hover; open rows have none. */
-const railRow = (t: Track, closed = false) => `
-  <div class="titem ${closed ? 'closed' : ''} ${activeTab === t.id ? 'sel' : ''}" data-id="${t.id}">
+const railRow = (t: Track, closed = false, dis?: Suffix) => `
+  <div class="titem ${closed ? 'closed' : ''} ${activeTab === t.id ? 'sel' : ''}" data-id="${t.id}"
+       title="${esc(`${t.question ? `${t.question}\n` : ''}double-click to rename`)}">
     <span class="dot ${dotOf(t)}"></span>
     <span class="tname">${esc(t.title)}</span>
+    ${dis ? `<span class="tdis" title="${esc(dis.tip)}">${esc(dis.text)}</span>` : ''}
     <span class="tago">${ago(t.lastActivityAt)}</span>
     ${
       closed
@@ -396,11 +460,22 @@ const railRow = (t: Track, closed = false) => `
  * in place instead, which says the same thing without moving anything.
  */
 function renderRail() {
+  // A rename puts an input inside this list, and an age ticking from 1m to 2m
+  // is enough to rebuild it — so leave the list alone until the rename is over,
+  // or a five-second poll eats what is being typed.
+  if (renaming !== null) return;
+
   const needs = tracks.filter((t) => t.court === 'ON_ME').length;
+  // Across both halves: two tracks called "miles", one open and one finished,
+  // are no easier to tell apart for sitting in different sections.
+  const dis = disambiguate([...tracks, ...(doneOpen ? closedTracks : [])]);
+  const suffix = (t: Track) => dis.get(t.id)?.text ?? '';
 
   const sig =
-    tracks.map((t) => `${t.id}/${t.title}/${dotOf(t)}/${ago(t.lastActivityAt)}`).join(',') +
-    `|${activeTab}|${doneOpen}|${closedTracks.map((t) => t.id).join(',')}|${archivedTracks.length}`;
+    tracks
+      .map((t) => `${t.id}/${t.title}/${dotOf(t)}/${ago(t.lastActivityAt)}/${suffix(t)}`)
+      .join(',') +
+    `|${activeTab}|${doneOpen}|${closedTracks.map((t) => `${t.id}/${suffix(t)}`).join(',')}|${archivedTracks.length}`;
   if (railSig === sig) return;
   railSig = sig;
 
@@ -419,7 +494,7 @@ function renderRail() {
     ${
       doneOpen
         ? (
-            closedTracks.map((t) => railRow(t, true)).join('') ||
+            closedTracks.map((t) => railRow(t, true, dis.get(t.id))).join('') ||
               '<div class="pad muted">nothing finished yet</div>'
           ) + archived
         : ''
@@ -437,11 +512,15 @@ function renderRail() {
              : ''
          }
        </div>
-       ${tracks.map((t) => railRow(t)).join('')}
+       ${tracks.map((t) => railRow(t, false, dis.get(t.id))).join('')}
        ${done}`;
 
   for (const el of document.querySelectorAll<HTMLElement>('.titem')) {
     el.onclick = () => openTrack(Number(el.dataset.id));
+    el.ondblclick = (e) => {
+      e.preventDefault();
+      beginRename(Number(el.dataset.id));
+    };
   }
   for (const b of document.querySelectorAll<HTMLButtonElement>('[data-archive]')) {
     b.onclick = (e) => {
@@ -457,6 +536,66 @@ function renderRail() {
   if (arch) arch.onclick = () => openArchiveSheet();
   const jump = document.getElementById('needsjump');
   if (jump) jump.onclick = () => jumpToNeedsYou();
+}
+
+/**
+ * The track being renamed in the rail, and the input doing it. A track opened
+ * without a question is named after its folder, which is nobody's choice of
+ * name — this is where that gets fixed, in the list where the name is read.
+ */
+let renaming: number | null = null;
+let renameInput: HTMLInputElement | null = null;
+
+function beginRename(id: number) {
+  if (renaming !== null) return;
+  const t = trackById(id);
+  const name = document.querySelector<HTMLElement>(`.titem[data-id="${id}"] .tname`);
+  if (!t || !name) return;
+  renaming = id;
+  const input = document.createElement('input');
+  input.className = 'tedit';
+  input.value = t.title;
+  input.spellcheck = false;
+  input.setAttribute('aria-label', 'track name');
+  renameInput = input;
+  // The row is rebuilt from scratch when the rename ends, and that is what puts
+  // the name back — nothing here has to restore the element it replaced.
+  name.replaceWith(input);
+  input.focus();
+  input.select();
+  input.onkeydown = (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    void endRename(true);
+  };
+  // Clicking away commits, the way a single-field edit in a list should; the
+  // row underneath must not also take that click as "open this track".
+  input.onblur = () => void endRename(true);
+  input.onclick = (e) => e.stopPropagation();
+  input.ondblclick = (e) => e.stopPropagation();
+}
+
+async function endRename(save: boolean) {
+  const id = renaming;
+  const input = renameInput;
+  if (id === null || !input) return;
+  // Cleared before the await: pressing Enter also blurs the input, and the
+  // second call has to find nothing left to do rather than rename twice.
+  renaming = null;
+  renameInput = null;
+  const title = input.value.trim();
+  const t = trackById(id);
+  // The signature describes a list that no longer exists — force the rebuild
+  // that puts the name span back in place of the input.
+  railSig = '';
+  if (save && title && title !== t?.title) {
+    await window.omi.rpc('tracks.update', { id, patch: { title } }).catch(() => {});
+    // A new name changes the tab too, and can settle a collision in the rail.
+    await refresh().catch(() => renderRail());
+  } else {
+    renderRail();
+  }
+  focusTerminal();
 }
 
 /**
@@ -2485,6 +2624,8 @@ function renderKeysSheet() {
 function onShortcutKey(e: KeyboardEvent) {
   const s = shortcutFor(e);
   if (!s) return;
+  // A rename is a text field: Ctrl+W in one is a word, not a session to drop.
+  if (renaming !== null) return;
   // Taken before xterm's textarea sees it, so the key never reaches the pty.
   e.preventDefault();
   e.stopPropagation();
@@ -2563,6 +2704,11 @@ async function boot() {
       if (picker) {
         e.stopPropagation();
         closePicker(null);
+        return;
+      }
+      if (renaming !== null) {
+        e.stopPropagation();
+        void endRename(false);
         return;
       }
       if (!$('tabmenu').hidden) {
