@@ -28,7 +28,7 @@ usage: ./release.sh <command>
   key new [uid]       create the signing key and give CI the private half
   key public [file]   write the public key users import (default: stdout)
   key backup <file>   save the private key somewhere you control
-  key rotate          replace the signing key — every user must re-trust it
+  key rotate [uid]    replace the signing key — every user must re-trust it
 
   X.Y.Z               cut the release: test, bump, commit, tag, push
 
@@ -167,8 +167,10 @@ cmd_key() {
       echo "current key leaked."
       confirm "rotate the signing key?" || { echo "nothing changed"; exit 1; }
       confirm "really? every user must act before they can upgrade again" || { echo "nothing changed"; exit 1; }
-      # Keep the old key's uid, so rotating does not quietly rename the key.
-      uid="$(gpgk --list-keys --with-colons "$fpr" 2>/dev/null | awk -F: '/^uid:/ {print $10; exit}')"
+      # Keep the old key's uid unless one is given. Rotating should not quietly
+      # rename the key — but it is also the only way to correct a uid, since a
+      # revoked one stays visible in the exported public key.
+      uid="${2:-$(gpgk --list-keys --with-colons "$fpr" 2>/dev/null | awk -F: '/^uid:/ {print $10; exit}')}"
       # Build the replacement beside the old keyring and swap only once it
       # exists: a failure here must not leave the project with no key at all.
       staging="$KEYRING.new-$$"

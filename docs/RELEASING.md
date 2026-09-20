@@ -103,7 +103,7 @@ the project rather than whoever cut the release. Pass your own to
 | `./release.sh key` | fingerprint, uid, and whether CI holds it |
 | `./release.sh key public` | the public key users import (the workflow publishes this as `oh-my-ide.pub` on every release) |
 | `./release.sh key backup <file>` | the private key, armoured, mode 600 |
-| `./release.sh key rotate` | replace it — asks twice, and see below |
+| `./release.sh key rotate [uid]` | replace it — asks twice, and see below. Keeps the old uid unless you pass one, which is the only way to correct a uid: a revoked one stays visible in the exported key |
 
 Keep the key. Rotating it is not a release detail: every existing install trusts the old
 one, so until each user runs `pacman-key --add` and `--lsign-key` again, their next
