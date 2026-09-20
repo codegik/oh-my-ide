@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('omi', {
   welcome: () => ipcRenderer.invoke('omi:welcome'),
   openExternal: (url: string) => ipcRenderer.invoke('omi:openExternal', url),
   listDir: (raw: string) => ipcRenderer.invoke('omi:listDir', raw),
+  openTerminal: (dir: string) => ipcRenderer.invoke('omi:openTerminal', dir),
 
   ptyInput: (viewId: string, bytes: Uint8Array) => ipcRenderer.send('omi:ptyInput', viewId, bytes),
   onPty: (cb: (viewId: string, epoch: number, offset: string, bytes: Uint8Array) => void) =>

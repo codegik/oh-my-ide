@@ -150,6 +150,16 @@
   /* Bound to sessions: no longer a choice, so it stops behaving like one. */
   .folder.fixed { cursor:default; }
   .folder.fixed:hover { color:var(--dim); }
+  /* Opens a real terminal where the track works; sits with the path it opens. */
+  .shell { display:inline-flex; align-items:center; justify-content:center; flex:none;
+           width:calc(1lh + 6px); height:calc(1lh + 6px); padding:0; background:transparent;
+           color:var(--dim); border:1px solid var(--line); border-radius:5px; cursor:pointer;
+           font:inherit; margin-right:-4px; }
+  .shell svg { display:block; width:1.05em; height:1.05em; }
+  .shell:hover { color:var(--text); border-color:var(--dim); }
+  .shell:disabled { opacity:.35; cursor:default; }
+  .shell:disabled:hover { color:var(--dim); border-color:var(--line); }
+  .shell.bad { color:var(--ON_ME); border-color:var(--ON_ME); }
   .body { flex:1; display:grid; grid-template-columns:minmax(0,1fr) 330px; min-height:0; position:relative; }
   .left { display:flex; flex-direction:column; min-width:0; min-height:0; border-right:1px solid var(--line); }
 

@@ -15,6 +15,7 @@ import {
 } from '@omi/protocol';
 import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { onPath, resolveTerminal } from './terminal.js';
 
 // Hyprland/Wayland: without these Electron renders through XWayland and is blurry
 // at fractional scaling.
@@ -292,6 +293,42 @@ async function listDir(
   return { home, path: abs, dirs };
 }
 
+/**
+ * Opens the user's own terminal in `dir`, which the renderer takes from the
+ * session on screen: a background job that moved into a worktree is not where
+ * its track is, and the folder you want a shell in is the one it works in.
+ *
+ * The renderer can name any string, so the folder is checked here — and a folder
+ * is all the terminal is ever given, never a command to run inside it.
+ */
+async function openTerminal(raw: string): Promise<{ ok: boolean; error?: string }> {
+  if (typeof raw !== 'string' || !path.isAbsolute(raw)) return { ok: false, error: 'no folder' };
+  const dir = path.resolve(raw);
+  const st = await fs.promises.stat(dir).catch(() => null);
+  if (!st?.isDirectory()) return { ok: false, error: `${dir} is not a folder` };
+
+  const launch = resolveTerminal(dir, {
+    platform: process.platform,
+    env: process.env,
+    exists: (cmd) => onPath(cmd, process.env),
+  });
+  if (!launch) return { ok: false, error: 'no terminal found — set $TERMINAL' };
+
+  try {
+    // Detached, like the daemon: closing the app must not take the shell with it.
+    const child = spawn(launch.file, launch.args, {
+      cwd: launch.cwd,
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.on('error', (e) => process.stderr.write(`[desktop] terminal: ${e.message}\n`));
+    child.unref();
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  return { ok: true };
+}
+
 const client = new DaemonClient();
 
 /**
@@ -372,6 +409,10 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'omi:listDir',
     guard((_e, raw: string) => listDir(raw)),
+  );
+  ipcMain.handle(
+    'omi:openTerminal',
+    guard((_e, dir: string) => openTerminal(dir)),
   );
   ipcMain.on('omi:ptyInput', (e, viewId: string, bytes: Uint8Array) => {
     if (fromApp(e)) client.ptyInput(viewId, bytes);

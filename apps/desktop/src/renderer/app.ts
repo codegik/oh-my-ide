@@ -14,6 +14,7 @@ declare global {
       welcome(): Promise<any>;
       openExternal(url: string): Promise<void>;
       listDir(raw: string): Promise<{ home: string; path: string; dirs: string[] } | null>;
+      openTerminal(dir: string): Promise<{ ok: boolean; error?: string }>;
       ptyInput(viewId: string, bytes: Uint8Array): void;
       onPty(cb: (viewId: string, epoch: number, offset: string, bytes: Uint8Array) => void): void;
       onEvent(cb: (msg: any) => void): void;
@@ -355,6 +356,16 @@ function currentSession(t: Track): Ref | undefined {
   const list = sessionRefsOf(t);
   const picked = list.find((r) => r.externalId === activeSession[t.id]);
   return picked ?? list.find(isAttachable) ?? list[0];
+}
+
+/**
+ * Where the track is ACTUALLY working right now. A background session that moved
+ * into a worktree runs somewhere else than the track's folder, and that worktree
+ * — not the folder the track was pointed at — is where a shell is any use.
+ */
+function workingDir(t: Track): string | null {
+  const session = currentSession(t);
+  return (session && liveSession(session)?.cwd) || t.cwd || null;
 }
 
 // ── rendering ───────────────────────────────────────────────────────────────
@@ -831,6 +842,7 @@ const trackById = (id: number) =>
 const DETAIL_SKELETON = `
   <div class="thead">
     <div class="trow">
+      <button class="shell" id="shell"></button>
       <span class="folder" id="folder"></span>
       <span class="court" id="whybtn" title="why?"></span>
       <button class="fin" id="finish"></button>
@@ -887,6 +899,30 @@ function buildDetail(id: number) {
     if (!dir) return;
     await window.omi.rpc('tracks.update', { id, patch: { cwd: dir } });
     await refresh();
+  };
+
+  /**
+   * Your own terminal, in the folder the session on screen is working in. The
+   * failure is reported on the folder line rather than swallowed: "I clicked and
+   * nothing happened" is the worst possible answer for a button that opens a
+   * window somewhere else.
+   */
+  $('shell').onclick = async () => {
+    const t = trackById(id);
+    const dir = t && workingDir(t);
+    if (!t || !dir) return;
+    const res = await window.omi
+      .openTerminal(dir)
+      .catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+    if (res.ok) return;
+    $('shell').classList.add('bad');
+    $('folder').textContent = res.error ?? 'could not open a terminal';
+    setTimeout(() => {
+      const cur = trackById(id);
+      if (!cur || !$('folder').isConnected || mounted?.trackId !== id) return;
+      setFolderLabel(cur);
+      setShellButton(cur);
+    }, 2500);
   };
 
   $('usage').onclick = async (e) => {
@@ -990,7 +1026,7 @@ function buildDetail(id: number) {
  */
 function patchHead(t: Track) {
   const m = mounted as NonNullable<typeof mounted>;
-  const sig = `${t.court}|${t.lifecycle}|${t.cwd}|${sessionRefsOf(t).length > 0}`;
+  const sig = `${t.court}|${t.lifecycle}|${t.cwd}|${workingDir(t)}|${sessionRefsOf(t).length > 0}`;
   if (m.sig.head === sig) return;
   m.sig.head = sig;
 
@@ -1018,6 +1054,11 @@ function patchHead(t: Track) {
       });
   };
 
+  setFolderLabel(t);
+  setShellButton(t);
+}
+
+function setFolderLabel(t: Track) {
   const folder = $('folder');
   const fixed = !!t.cwd && sessionRefsOf(t).length > 0;
   folder.className = fixed ? 'folder fixed' : 'folder';
@@ -1028,6 +1069,27 @@ function patchHead(t: Track) {
     : 'no folder set — click to choose one';
   folder.textContent = t.cwd ? shortPath(t.cwd) : 'choose a folder…';
 }
+
+/**
+ * The escape hatch, next to the folder it opens: a real terminal, in the folder
+ * the track is working in. Disabled until there is one, because a shell in the
+ * app's own working directory is worse than no shell at all.
+ */
+function setShellButton(t: Track) {
+  const dir = workingDir(t);
+  const btn = $<HTMLButtonElement>('shell');
+  btn.innerHTML = ICON_SHELL;
+  btn.classList.remove('bad');
+  btn.disabled = !dir;
+  btn.title = dir
+    ? `open a terminal in ${dir}${dir === t.cwd ? '' : ' (where the session is working)'}`
+    : 'no folder yet — nowhere to open a terminal';
+}
+
+/** A prompt and a caret: the head row's "open my terminal here". */
+const ICON_SHELL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M4 17l6-5-6-5"/><path d="M12 19h8"/></svg>`;
 
 /** Icons for the session strip's buttons; they take the button's text colour. */
 const ICON_PLUS = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"

@@ -224,6 +224,7 @@ Early. Here's where things stand:
 - Live, typeable Claude Code TUI inside each track
 - Typed refs: GitHub PR/issue, Slack permalink, Jira URL, bare `PAY-123`
 - Court worked out from session state, with a "why?" popover to pin, drop or close
+- One click opens your own terminal where the track's session is working (its worktree, if it moved into one)
 - Tracks and open tabs saved in SQLite, surviving restarts
 
 **Not built yet**
