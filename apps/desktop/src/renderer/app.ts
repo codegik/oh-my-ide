@@ -1825,6 +1825,12 @@ function renderWizard() {
 
       <label class="wlab">sessions in this folder</label>
       <div class="wsess">
+        <label class="wopt">
+          <input type="checkbox" id="wfresh" ${w.fresh ? 'checked' : ''} ${w.cwd ? '' : 'disabled'} />
+          <span class="dot ON_CLAUDE"></span>
+          <span class="wname">open a new session</span>
+          <span class="sstate">idle until you type in it</span>
+        </label>
         ${!w.cwd ? '<div class="muted pad">choose a folder first</div>' : ''}
         ${w.cwd && here.length === 0 ? '<div class="muted pad">none running here yet</div>' : ''}
         ${here
@@ -1852,12 +1858,6 @@ function renderWizard() {
           </label>`,
           )
           .join('')}
-        <label class="wopt">
-          <input type="checkbox" id="wfresh" ${w.fresh ? 'checked' : ''} ${w.cwd ? '' : 'disabled'} />
-          <span class="dot ON_CLAUDE"></span>
-          <span class="wname">open a new session</span>
-          <span class="sstate">idle until you type in it</span>
-        </label>
       </div>
 
       ${w.busy ? `<div class="wbusy">${esc(w.busy)}</div>` : ''}
