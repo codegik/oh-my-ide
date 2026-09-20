@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveTerminal } from '../src/terminal.js';
+import { macScriptHandler, resolveTerminal } from '../src/terminal.js';
 
 /**
  * The head row's terminal button lands here. Getting it wrong means a click that
@@ -46,13 +46,15 @@ describe('resolveTerminal', () => {
     expect(resolveTerminal('/w', linux({ TERMINAL: '' }, []))).toBeNull();
   });
 
+  const mac = (over: Partial<Parameters<typeof resolveTerminal>[1]> = {}) => ({
+    platform: 'darwin',
+    env: {},
+    exists: () => false,
+    ...over,
+  });
+
   it('passes the folder to `open` on macOS, where cwd means nothing', () => {
-    const l = resolveTerminal('/Users/me/proj', {
-      platform: 'darwin',
-      env: {},
-      exists: () => false,
-    });
-    expect(l).toEqual({
+    expect(resolveTerminal('/Users/me/proj', mac())).toEqual({
       file: 'open',
       args: ['-a', 'Terminal', '/Users/me/proj'],
       cwd: '/Users/me/proj',
@@ -60,11 +62,66 @@ describe('resolveTerminal', () => {
   });
 
   it('honours $TERMINAL as an app name on macOS', () => {
-    const l = resolveTerminal('/p', {
-      platform: 'darwin',
-      env: { TERMINAL: 'iTerm' },
-      exists: () => false,
-    });
+    const l = resolveTerminal('/p', mac({ env: { TERMINAL: 'iTerm' } }));
     expect(l?.args).toEqual(['-a', 'iTerm', '/p']);
+  });
+
+  it('opens the app the user set for .command files, by bundle id', () => {
+    const l = resolveTerminal(
+      '/p',
+      mac({
+        scriptHandler: () => 'com.googlecode.iterm2',
+        // Installed and earlier in the list; the deliberate choice still wins.
+        hasApp: (a) => a === 'Ghostty',
+      }),
+    );
+    expect(l?.args).toEqual(['-b', 'com.googlecode.iterm2', '/p']);
+  });
+
+  it('falls back to whichever known terminal is installed', () => {
+    const l = resolveTerminal(
+      '/p',
+      mac({ scriptHandler: () => null, hasApp: (a) => a === 'iTerm' }),
+    );
+    expect(l?.args).toEqual(['-a', 'iTerm', '/p']);
+  });
+
+  it('lands on Terminal when nothing else is installed', () => {
+    const l = resolveTerminal('/p', mac({ scriptHandler: () => null, hasApp: () => false }));
+    expect(l?.args).toEqual(['-a', 'Terminal', '/p']);
+  });
+});
+
+/**
+ * Reading what the user chose. The plist holds overrides only, so "no entry"
+ * means "never changed it" — and answering null there is what lets the installed
+ * -app scan have its say.
+ */
+describe('macScriptHandler', () => {
+  const plist = (handlers: unknown) => () => JSON.stringify({ LSHandlers: handlers });
+
+  it('finds the handler for shell scripts', () => {
+    const id = macScriptHandler(
+      plist([
+        { LSHandlerContentType: 'public.html', LSHandlerRoleAll: 'org.mozilla.firefox' },
+        {
+          LSHandlerContentType: 'com.apple.terminal.shell-script',
+          LSHandlerRoleAll: 'com.googlecode.iterm2',
+        },
+      ]),
+    );
+    expect(id).toBe('com.googlecode.iterm2');
+  });
+
+  it('answers null when the user never changed it', () => {
+    expect(macScriptHandler(plist([{ LSHandlerContentType: 'public.html' }]))).toBeNull();
+  });
+
+  it('answers null when there is no plist to read', () => {
+    expect(
+      macScriptHandler(() => {
+        throw new Error('ENOENT');
+      }),
+    ).toBeNull();
   });
 });

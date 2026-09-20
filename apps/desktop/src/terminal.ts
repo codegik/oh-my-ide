@@ -25,6 +25,16 @@ const LINUX_TERMINALS = [
   'xterm',
 ];
 
+/**
+ * macOS has no $TERMINAL and no system-wide "which terminal" setting, so the
+ * order below is: what you chose to open shell scripts with, then whichever of
+ * these is installed, then Apple's own. Only apps that take a folder as an
+ * argument belong here — kitty.app and Alacritty.app ignore one and would open
+ * at your home directory, which is a worse answer than Terminal in the folder
+ * you asked for.
+ */
+const MAC_TERMINALS = ['iTerm', 'Ghostty', 'WezTerm', 'Warp', 'Hyper'];
+
 export type TerminalLaunch = { file: string; args: string[]; cwd: string };
 
 export type ResolveEnv = {
@@ -32,6 +42,10 @@ export type ResolveEnv = {
   env: Record<string, string | undefined>;
   /** True when this command can be run: a PATH lookup, faked in tests. */
   exists: (cmd: string) => boolean;
+  /** macOS: is `<app>.app` installed? */
+  hasApp?: (app: string) => boolean;
+  /** macOS: the bundle id the user opens `.command` files with, if they set one. */
+  scriptHandler?: () => string | null;
 };
 
 /**
@@ -44,7 +58,19 @@ export function resolveTerminal(dir: string, ctx: ResolveEnv): TerminalLaunch | 
   if (ctx.platform === 'darwin') {
     // `open` starts the app from launchd, where our cwd means nothing; on macOS
     // the folder is an argument and $TERMINAL is an app name, not a binary.
-    return { file: 'open', args: ['-a', ctx.env.TERMINAL || 'Terminal', dir], cwd: dir };
+    const mac = (how: string[]): TerminalLaunch => ({
+      file: 'open',
+      args: [...how, dir],
+      cwd: dir,
+    });
+    const named = ctx.env.TERMINAL?.trim();
+    if (named) return mac(['-a', named]);
+    // Set only when someone changed it, so an answer here is a real choice —
+    // and it is the one iTerm, Ghostty and friends ask for when you make them
+    // your default terminal.
+    const chosen = ctx.scriptHandler?.();
+    if (chosen) return mac(['-b', chosen]);
+    return mac(['-a', MAC_TERMINALS.find((a) => ctx.hasApp?.(a)) ?? 'Terminal']);
   }
   const named = ctx.env.TERMINAL?.trim();
   const candidates = named ? [named, ...LINUX_TERMINALS] : LINUX_TERMINALS;
@@ -52,6 +78,38 @@ export function resolveTerminal(dir: string, ctx: ResolveEnv): TerminalLaunch | 
   if (!file) return null;
   const args = path.basename(file) === 'xdg-terminal-exec' ? [`--dir=${dir}`] : [];
   return { file, args, cwd: dir };
+}
+
+/** Is `<app>.app` installed, in any of the three places macOS keeps apps? */
+export function hasMacApp(app: string): boolean {
+  const home = process.env.HOME ?? '';
+  return ['/Applications', `${home}/Applications`, '/System/Applications'].some((d) =>
+    fs.existsSync(path.join(d, `${app}.app`)),
+  );
+}
+
+/**
+ * The bundle id set to open `.command` files, or null when the user never
+ * changed it. LaunchServices keeps only overrides in this plist, which is what
+ * makes it worth reading: anything in it was chosen on purpose.
+ */
+export function macScriptHandler(readPlist: (file: string) => string): string | null {
+  const home = process.env.HOME ?? '';
+  const plist = path.join(
+    home,
+    'Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist',
+  );
+  try {
+    const parsed = JSON.parse(readPlist(plist)) as {
+      LSHandlers?: Array<Record<string, string>>;
+    };
+    const hit = parsed.LSHandlers?.find(
+      (h) => h.LSHandlerContentType === 'com.apple.terminal.shell-script',
+    );
+    return hit?.LSHandlerRoleAll ?? hit?.LSHandlerRoleShell ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** Is `cmd` runnable — either a path to an executable, or a name on PATH. */

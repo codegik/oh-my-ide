@@ -15,7 +15,7 @@ import {
 } from '@omi/protocol';
 import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
-import { onPath, resolveTerminal } from './terminal.js';
+import { hasMacApp, macScriptHandler, onPath, resolveTerminal } from './terminal.js';
 
 // Hyprland/Wayland: without these Electron renders through XWayland and is blurry
 // at fractional scaling.
@@ -311,6 +311,16 @@ async function openTerminal(raw: string): Promise<{ ok: boolean; error?: string 
     platform: process.platform,
     env: process.env,
     exists: (cmd) => onPath(cmd, process.env),
+    hasApp: hasMacApp,
+    // Binary plist, so plutil does the reading; it ships with macOS.
+    scriptHandler: () =>
+      macScriptHandler((file) =>
+        execFileSync('plutil', ['-convert', 'json', '-o', '-', file], {
+          encoding: 'utf8',
+          timeout: 2000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }),
+      ),
   });
   if (!launch) return { ok: false, error: 'no terminal found — set $TERMINAL' };
 
