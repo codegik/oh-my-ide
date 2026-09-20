@@ -73,7 +73,8 @@ tools/
   scripts/         verify-abi.mjs, package-linux.mjs (the release tarball; see RELEASING.md)
 packaging/
   linux/           /usr/bin/oh-my-ide launcher and the .desktop entry
-  aur/             oh-my-ide-bin PKGBUILD; the release workflow publishes it
+  aur/             oh-my-ide-bin PKGBUILD; built for our pacman repo, and for the
+                   AUR once it takes new accounts (see RELEASING.md)
 ```
 
 ### Architectural spine

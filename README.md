@@ -101,19 +101,56 @@ Nothing is locked in.
 
 ### Arch Linux
 
-oh-my-ide is in the AUR as [`oh-my-ide-bin`](https://aur.archlinux.org/packages/oh-my-ide-bin):
+oh-my-ide has its own pacman repository, so it installs and upgrades like anything else
+on the system. Trust the key its packages are signed with:
 
 ```sh
-yay -S oh-my-ide-bin      # or paru, or any AUR helper
+curl -fsSLO https://github.com/codegik/oh-my-ide/releases/download/arch-repo/oh-my-ide.pub
+sudo pacman-key --add oh-my-ide.pub
+sudo pacman-key --lsign-key "$(gpg --show-keys --with-colons oh-my-ide.pub | awk -F: '/^fpr:/ {print $10; exit}')"
 ```
 
-It shows up in your app launcher, and new versions arrive with your usual `yay -Syu`.
+Then add the repository and install:
+
+```sh
+sudo tee -a /etc/pacman.conf >/dev/null <<'EOF'
+
+[oh-my-ide]
+Server = https://github.com/codegik/oh-my-ide/releases/download/arch-repo
+EOF
+
+sudo pacman -Sy oh-my-ide-bin
+```
+
+It shows up in your app launcher, and new versions arrive with your usual `pacman -Syu`.
 It bundles its own Electron, so you don't need Node or pnpm. You do need **Claude Code 2.1+**
 (`claude`). Wherever you installed it (npm, nvm, mise or the native installer), the app finds
 it through your login shell's `PATH`.
 
 After an upgrade, the next launch swaps in the new daemon. Your Claude sessions are not
 touched.
+
+<details>
+<summary>Just this once, without adding the repository</summary>
+
+Every release also attaches the built package, on the
+[releases page](https://github.com/codegik/oh-my-ide/releases/latest). Install the file
+you downloaded:
+
+```sh
+gh release download --repo codegik/oh-my-ide --pattern '*.pkg.tar.zst'
+sudo pacman -U ./oh-my-ide-bin-*-x86_64.pkg.tar.zst
+```
+
+No key needed: `pacman -U` on a local file installs it unsigned. You then upgrade by
+repeating this, which is the trade for not adding the repository.
+
+</details>
+
+> **Not on the AUR yet.** The AUR has not accepted new registrations since the June 2026
+> malicious-package incident, so `oh-my-ide-bin` cannot be published there. The PKGBUILD
+> is ready in [`packaging/aur/`](packaging/aur/oh-my-ide-bin/PKGBUILD) and the release
+> workflow will push it the day registration reopens.
 
 ### From source
 

@@ -1,6 +1,12 @@
 # Pushing a `v*` tag publishes a release: a GitHub release with the Linux
-# tarball, then the AUR package oh-my-ide-bin pointing at it. Users see the new
-# version the next time they run `yay -Syu` (or paru, or any AUR helper).
+# tarball and the built Arch package, that package added to our own pacman
+# repo, and — once the AUR takes new accounts again — the AUR package
+# oh-my-ide-bin pointing at the tarball.
+#
+# The pacman repo is the channel we control: users add one section to
+# pacman.conf and upgrade with `pacman -Syu`. The AUR has not accepted new
+# registrations since the June 2026 malicious-package incident, so we cannot
+# publish there yet; that job stays ready and skips until the key exists.
 #
 # The tag must match "version" in the root package.json. See docs/RELEASING.md.
 name: release
@@ -71,6 +77,82 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" release/*.tar.gz release/*.tar.gz.sha256 \
             --title "oh-my-ide $GITHUB_REF_NAME" --generate-notes
+
+  # Builds the real Arch package and serves it from a pacman repo we host
+  # ourselves, as assets on a release pinned to the `arch-repo` tag: every asset
+  # of one release shares a URL prefix, which is all a pacman Server needs.
+  pacman:
+    needs: linux
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+    env:
+      GPG_PRIVATE_KEY: ${{ secrets.PACKAGE_GPG_PRIVATE_KEY }}
+      VERSION: ${{ needs.linux.outputs.version }}
+      SHA256: ${{ needs.linux.outputs.sha256 }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      REPO_TAG: arch-repo
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed git github-cli gnupg
+
+      - uses: actions/checkout@v5
+
+      - name: Point the PKGBUILD at this release
+        run: |
+          install -d build
+          cp packaging/aur/oh-my-ide-bin/PKGBUILD build/PKGBUILD
+          sed -i -e "s/^pkgver=.*/pkgver=$VERSION/" \
+                 -e "s/^pkgrel=.*/pkgrel=1/" \
+                 -e "s/^sha256sums=.*/sha256sums=('$SHA256')/" build/PKGBUILD
+
+      # makepkg refuses to run as root. Building from the URL the release just
+      # published proves that URL and its checksum before any user sees them.
+      - name: Build the package
+        run: |
+          useradd -m builder
+          chown -R builder build
+          su builder -c 'cd build && makepkg --nodeps --noconfirm'
+
+      # pacman's default RemoteFileSigLevel is Required, so an unsigned package
+      # is one users cannot install from a URL at all. Without the key we still
+      # attach it — `pacman -U` on a downloaded file only needs Optional — but
+      # the repo would be unusable, so it is skipped.
+      - name: Sign the package
+        if: env.GPG_PRIVATE_KEY != ''
+        run: |
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          keyid="$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')"
+          echo "GPG_KEY_ID=$keyid" >>"$GITHUB_ENV"
+          gpg --batch --yes --pinentry-mode loopback --local-user "$keyid" \
+            --detach-sign --no-armor build/*.pkg.tar.zst
+
+      - name: Skip the repo without a signing key
+        if: env.GPG_PRIVATE_KEY == ''
+        run: echo "::warning::PACKAGE_GPG_PRIVATE_KEY is not set; the package is attached to the release but the pacman repo was not updated"
+
+      - name: Attach the package to the release
+        run: gh release upload "$GITHUB_REF_NAME" build/*.pkg.tar.zst* --clobber
+
+      - name: Publish it to the pacman repo
+        if: env.GPG_PRIVATE_KEY != ''
+        run: |
+          install -d repo
+          mv build/*.pkg.tar.zst* repo/
+          if gh release view "$REPO_TAG" >/dev/null 2>&1; then
+            # repo-add appends to the existing database, so pull it down first.
+            gh release download "$REPO_TAG" --dir repo \
+              --pattern 'oh-my-ide.db.tar.gz' --pattern 'oh-my-ide.files.tar.gz' || true
+          else
+            gh release create "$REPO_TAG" --latest=false --title 'Arch repository' \
+              --notes 'The pacman repository for oh-my-ide. See the README for the pacman.conf section that reads it. Every release adds its package here; the tag is a fixed home for the assets and does not mark a version.'
+          fi
+          repo-add --sign --key "$GPG_KEY_ID" repo/oh-my-ide.db.tar.gz repo/*.pkg.tar.zst
+          # The key users verify the repo with, so they can import it by URL.
+          gpg --armor --export "$GPG_KEY_ID" >repo/oh-my-ide.pub
+          # repo-add writes oh-my-ide.db as a symlink to the tarball, which is
+          # the name pacman asks for; gh uploads what it points at.
+          gh release upload "$REPO_TAG" repo/* --clobber
 
   aur:
     needs: linux

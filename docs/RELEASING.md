@@ -9,11 +9,40 @@ which:
    **packaged** daemon on a scratch socket and database, smoke-tests it over the
    wire, and packs `oh-my-ide-X.Y.Z-linux-x64.tar.gz`
 4. publishes a GitHub release with that tarball and its `.sha256`
-5. updates the AUR package [`oh-my-ide-bin`](https://aur.archlinux.org/packages/oh-my-ide-bin):
-   it sets `pkgver` and `sha256sums` in [`packaging/aur/oh-my-ide-bin/PKGBUILD`](../packaging/aur/oh-my-ide-bin/PKGBUILD),
-   builds the package from the published URL to prove it, and pushes `PKGBUILD` and `.SRCINFO`
+5. builds the real Arch package from [`packaging/aur/oh-my-ide-bin/PKGBUILD`](../packaging/aur/oh-my-ide-bin/PKGBUILD),
+   downloading the tarball from the URL it just published so the URL and checksum are
+   proven, signs it, and attaches the `.pkg.tar.zst` to the same release
+6. adds that package to our own pacman repo and re-signs the database
+7. updates the AUR package `oh-my-ide-bin` — skipped until the AUR takes new accounts
 
-Users get the new version the next time they run `yay -Syu`.
+Users get the new version the next time they run `pacman -Syu`.
+
+## Why we host a pacman repo
+
+The AUR has not accepted new registrations since the June 2026 malicious-package
+incident. The form answers *"New account registration is temporarily closed"*, there is
+no manual queue, and requests on `aur-general` are turned down by the maintainers. So
+`oh-my-ide-bin` cannot exist on the AUR yet, however finished the PKGBUILD is.
+
+A repo of our own needs nobody's permission, and it is the better channel anyway: users
+get signed binaries and real `pacman -Syu` upgrades instead of a rebuild from source on
+every bump. It lives in the assets of one GitHub release, pinned to the **`arch-repo`**
+tag — every asset of a release shares a URL prefix, which is all a pacman `Server` needs:
+
+```
+https://github.com/codegik/oh-my-ide/releases/download/arch-repo/
+├── oh-my-ide.db            → the database pacman asks for (a symlink to the tarball)
+├── oh-my-ide.db.tar.gz     ┐
+├── oh-my-ide.files.tar.gz  ├ written by repo-add, each with a .sig
+├── oh-my-ide.pub             the public half of the signing key
+└── oh-my-ide-bin-X.Y.Z-1-x86_64.pkg.tar.zst (+ .sig), one per release
+```
+
+That tag is a fixed home for those assets. It does not mark a version, and it is created
+with `--latest=false` so it never displaces a real release on the repository front page.
+
+When the AUR reopens, do the [AUR setup](#when-the-aur-reopens) below and the seventh
+step starts running. Nothing else changes: both channels build the same PKGBUILD.
 
 ## Cutting a release
 
@@ -24,14 +53,32 @@ git tag v0.2.0
 git push origin main v0.2.0
 ```
 
-To fix only the packaging, with no app change (a new dependency in the PKGBUILD, say),
-edit the PKGBUILD here, then bump `pkgrel` by hand in the AUR repo. The next tag resets
-it to 1.
+A packaging-only fix — a new dependency in the PKGBUILD, say — still goes out as a tag.
+`pkgrel` is pinned to 1 by the workflow, because the repo serves whatever the last tag
+built; bumping it by hand would only matter in the AUR, where users rebuild.
 
 ## One-time setup
 
-The AUR step is skipped with a warning until these are done; the GitHub release still
-goes out.
+### The signing key
+
+pacman's default `RemoteFileSigLevel` is `Required`, so an unsigned package is one nobody
+can install over the network. The repo step is skipped with a warning until this exists;
+the GitHub release and the attached `.pkg.tar.zst` still go out.
+
+1. A key used for nothing else, with no passphrase, because CI cannot type one:
+   ```sh
+   gpg --quick-gen-key 'oh-my-ide packaging <you@example.com>' ed25519 sign never
+   ```
+2. The private half as a repo secret:
+   ```sh
+   gpg --armor --export-secret-keys 'oh-my-ide packaging' | gh secret set PACKAGE_GPG_PRIVATE_KEY
+   ```
+
+The workflow exports the public half to the repo as `oh-my-ide.pub` on every release, so
+users import it by URL. Keep the private key: replacing it means every user has to
+`pacman-key --lsign-key` the new one before their next upgrade works.
+
+### When the AUR reopens
 
 1. **An AUR account** at https://aur.archlinux.org/register, with an SSH key made just for CI:
    ```sh
@@ -53,6 +100,9 @@ pnpm build && pnpm package:linux      # release/oh-my-ide-<version>-linux-x64.ta
 
 To build and install the real package from that tarball, copy the PKGBUILD next to it,
 point `source=` at the file name, and run `makepkg -si`.
+
+To rehearse the repo itself, run `repo-add` over the package `makepkg` wrote and point a
+`Server = file:///path/to/repo` section at the directory.
 
 ## Layout
 
