@@ -93,6 +93,11 @@ secret, so back it up before you do anything else:
 ./release.sh key backup ~/somewhere-safe/oh-my-ide-packaging.asc
 ```
 
+The key's uid is `oh-my-ide packaging`, with no address attached. That uid ships in
+`oh-my-ide.pub` and is what `pacman-key` shows everyone who installs the app, so it names
+the project rather than whoever cut the release. Pass your own to
+`./release.sh key new '<uid>'` if you want something else there.
+
 | | |
 |---|---|
 | `./release.sh key` | fingerprint, uid, and whether CI holds it |

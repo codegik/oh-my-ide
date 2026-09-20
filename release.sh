@@ -25,7 +25,7 @@ usage: ./release.sh <command>
   doctor              check everything a release needs and say what is missing
 
   key                 show the signing key, and whether CI has it
-  key new             create the signing key and give CI the private half
+  key new [uid]       create the signing key and give CI the private half
   key public [file]   write the public key users import (default: stdout)
   key backup <file>   save the private key somewhere you control
   key rotate          replace the signing key — every user must re-trust it
@@ -47,11 +47,28 @@ step() { echo "${B}==>${N} $*"; }
 
 gpgk() { gpg --homedir "$KEYRING" --batch "$@"; }
 
-# The fingerprint of the packaging key, or empty if there is no keyring yet.
-key_fpr() {
-  [ -d "$KEYRING" ] || return 0
-  gpgk --list-secret-keys --with-colons 2>/dev/null | awk -F: '/^fpr:/ {print $10; exit}'
+fpr_of() {
+  [ -d "$1" ] || return 0
+  gpg --homedir "$1" --batch --list-secret-keys --with-colons 2>/dev/null |
+    awk -F: '/^fpr:/ {print $10; exit}'
 }
+
+# The fingerprint of the packaging key, or empty if there is no keyring yet.
+key_fpr() { fpr_of "$KEYRING"; }
+
+# Sign-only, no expiry — an expired key breaks every user's upgrade, not just
+# the next release. No passphrase: CI cannot type one, and the key's only
+# protection is that it lives nowhere but this keyring and the repo secret.
+generate_key() {
+  install -d -m 700 "$1"
+  gpg --homedir "$1" --batch --pinentry-mode loopback --passphrase '' --quiet \
+    --quick-gen-key "$2" ed25519 sign never
+}
+
+# gpg-agent holds the homedir it was started for, and its socket lives inside
+# it: move that directory with the agent running and the next gpg call fails
+# with "agent_genkey failed".
+stop_agent() { gpgconf --homedir "$1" --kill gpg-agent >/dev/null 2>&1 || true; }
 
 # gh needs no --repo: it reads the remote of the checkout we just cd'd into.
 secret_is_set() {
@@ -103,17 +120,15 @@ cmd_key() {
       fi
       have gpg || die "gpg is not installed"
       have gh || die "the GitHub CLI (gh) is not installed"
-      local email fpr
-      email="$(git config user.email || true)"
-      [ -n "$email" ] || die "set git config user.email first, or the key has no address"
-      step "creating the packaging key for <$email>"
-      install -d -m 700 "$KEYRING"
-      # No passphrase: CI cannot type one, and the key's only protection is that
-      # it lives nowhere but here and in the repo secret. Sign-only, no expiry —
-      # an expired key breaks every user's upgrade, not just the next release.
-      gpgk --pinentry-mode loopback --passphrase '' --quiet \
-        --quick-gen-key "$KEY_UID <$email>" ed25519 sign never
+      local uid fpr
+      # Deliberately not `git config user.email`: this uid is published in
+      # oh-my-ide.pub and shown by pacman-key to everyone who installs the app.
+      # The key identifies the project, not a person. Pass one to override.
+      uid="${2:-$KEY_UID}"
+      step "creating the packaging key: $uid"
+      generate_key "$KEYRING" "$uid"
       fpr="$(key_fpr)"
+      [ -n "$fpr" ] || die "gpg made no key"
       echo "  ${G}ok${N} $fpr"
       upload_secret "$fpr"
       echo
@@ -143,7 +158,8 @@ cmd_key() {
       ;;
 
     rotate)
-      local fpr; fpr="$(key_fpr)"
+      local fpr uid staging newfpr aside
+      fpr="$(key_fpr)"
       [ -n "$fpr" ] || die "there is no key to rotate; run: ./release.sh key new"
       echo "${Y}Rotating replaces the key every installed copy of oh-my-ide already trusts.${N}"
       echo "Until each user runs pacman-key --add and --lsign-key again, their next"
@@ -151,10 +167,30 @@ cmd_key() {
       echo "current key leaked."
       confirm "rotate the signing key?" || { echo "nothing changed"; exit 1; }
       confirm "really? every user must act before they can upgrade again" || { echo "nothing changed"; exit 1; }
-      local aside="$KEYRING.replaced-$(date +%Y%m%d%H%M%S)"
+      # Keep the old key's uid, so rotating does not quietly rename the key.
+      uid="$(gpgk --list-keys --with-colons "$fpr" 2>/dev/null | awk -F: '/^uid:/ {print $10; exit}')"
+      # Build the replacement beside the old keyring and swap only once it
+      # exists: a failure here must not leave the project with no key at all.
+      staging="$KEYRING.new-$$"
+      rm -rf "$staging"
+      step "creating the replacement key: ${uid:-$KEY_UID}"
+      generate_key "$staging" "${uid:-$KEY_UID}"
+      newfpr="$(fpr_of "$staging")"
+      if [ -z "$newfpr" ]; then
+        rm -rf "$staging"
+        die "gpg made no key; the current one is untouched"
+      fi
+      stop_agent "$staging"
+      stop_agent "$KEYRING"
+      aside="$KEYRING.replaced-$(date +%Y%m%d%H%M%S)"
       mv "$KEYRING" "$aside"
+      mv "$staging" "$KEYRING"
+      echo "  ${G}ok${N} $newfpr"
       echo "  old keyring kept at $aside ${D}(it still verifies packages already published)${N}"
-      cmd_key new
+      upload_secret "$newfpr"
+      echo
+      echo "${Y}Every user must now run${N} pacman-key --add and --lsign-key again."
+      echo "Publish the new key: ./release.sh key public"
       ;;
 
     *) usage; exit 1 ;;
