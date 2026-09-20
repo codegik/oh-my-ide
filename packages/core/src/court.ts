@@ -12,78 +12,101 @@ import type { Court, Derivation, Effective, TrackRef, TrackSnapshot } from './ty
  */
 interface Rule {
   id: string;
-  match(ref: TrackRef): { court: Court; weight: number; reason: string } | null;
+  /** How urgent this rule's answer is. Declared here so `ruleWeight` can read
+   *  it back without a second table to keep in sync. */
+  weight: number;
+  match(ref: TrackRef): { court: Court; reason: string } | null;
 }
 
 const RULES: Rule[] = [
   {
     id: 'claude.needs_permission',
+    weight: 100,
     match: (r) =>
       r.kind === 'claude_session' && r.state === 'NEEDS_PERMISSION'
-        ? { court: 'ON_ME', weight: 100, reason: 'a session is waiting for your approval' }
+        ? { court: 'ON_ME', reason: 'a session is waiting for your approval' }
         : null,
   },
   {
     id: 'gh.changes_requested',
+    weight: 92,
     match: (r) =>
       r.kind === 'github_pr' && r.state === 'CHANGES_REQUESTED'
-        ? { court: 'ON_ME', weight: 92, reason: 'changes requested on your PR' }
+        ? { court: 'ON_ME', reason: 'changes requested on your PR' }
         : null,
   },
   {
     id: 'gh.checks_failed',
+    weight: 88,
     match: (r) =>
       r.kind === 'github_pr' && r.state === 'CHECKS_FAILED'
-        ? { court: 'ON_ME', weight: 88, reason: 'CI is failing on your PR' }
+        ? { court: 'ON_ME', reason: 'CI is failing on your PR' }
         : null,
   },
   {
     id: 'gh.review_requested_of_me',
+    weight: 86,
     match: (r) =>
       r.kind === 'github_pr' && r.state === 'REVIEW_REQUESTED_OF_ME'
-        ? { court: 'ON_ME', weight: 86, reason: 'your review was requested' }
+        ? { court: 'ON_ME', reason: 'your review was requested' }
         : null,
   },
   {
     id: 'claude.needs_input',
+    weight: 80,
     match: (r) =>
       r.kind === 'claude_session' && r.state === 'NEEDS_INPUT'
         ? {
             court: 'ON_ME',
-            weight: 80,
             reason: 'a session finished its turn and is waiting on you',
           }
         : null,
   },
   {
     id: 'claude.failed',
+    weight: 70,
     match: (r) =>
       r.kind === 'claude_session' && r.state === 'FAILED'
-        ? { court: 'ON_ME', weight: 70, reason: 'a session failed' }
+        ? { court: 'ON_ME', reason: 'a session failed' }
         : null,
   },
   {
     id: 'claude.working',
+    weight: 60,
     match: (r) =>
       r.kind === 'claude_session' && r.state === 'WORKING'
-        ? { court: 'ON_CLAUDE', weight: 60, reason: 'a session is running' }
+        ? { court: 'ON_CLAUDE', reason: 'a session is running' }
         : null,
   },
   {
     id: 'gh.checks_pending',
+    weight: 45,
     match: (r) =>
       r.kind === 'github_pr' && r.state === 'CHECKS_PENDING'
-        ? { court: 'ON_SYSTEM', weight: 45, reason: 'CI is running' }
+        ? { court: 'ON_SYSTEM', reason: 'CI is running' }
         : null,
   },
   {
     id: 'gh.awaiting_review',
+    weight: 35,
     match: (r) =>
       r.kind === 'github_pr' && r.state === 'AWAITING_REVIEW'
-        ? { court: 'ON_THEM', weight: 35, reason: 'your PR is awaiting review' }
+        ? { court: 'ON_THEM', reason: 'your PR is awaiting review' }
         : null,
   },
 ];
+
+/**
+ * How urgent a rule is, by name — the same numbers `derive` sorts by, including
+ * the two rules that are not ref-driven.
+ *
+ * Anything deciding how loudly to say something (the tray, the notifier) ranks
+ * asks with this, rather than keeping a second opinion about which of them
+ * matters most. A rule nobody has heard of weighs nothing.
+ */
+const EXTRA_WEIGHT: Record<string, number> = { 'track.waiting_on': 30, 'track.stale': 15 };
+export const ruleWeight = (rule: string): number =>
+  RULES.find((r) => r.id === rule)?.weight ?? EXTRA_WEIGHT[rule] ?? 0;
 
 const COURT_ORDER: Record<Court, number> = {
   ON_ME: 0,
@@ -102,14 +125,14 @@ export function derive(t: TrackSnapshot, now: number): Derivation {
     if (!ref.isBlocking) continue;
     for (const rule of RULES) {
       const hit = rule.match(ref);
-      if (hit) candidates.push({ ...hit, rule: rule.id, refId: ref.id });
+      if (hit) candidates.push({ ...hit, weight: rule.weight, rule: rule.id, refId: ref.id });
     }
   }
 
   if (t.waitingOn && !candidates.some((c) => c.court === 'ON_ME')) {
     candidates.push({
       court: 'ON_THEM',
-      weight: 30,
+      weight: ruleWeight('track.waiting_on'),
       rule: 'track.waiting_on',
       reason: `waiting on ${t.waitingOn}`,
       refId: null,
@@ -119,7 +142,7 @@ export function derive(t: TrackSnapshot, now: number): Derivation {
   if (now - t.lastActivityAt > STALE_MS) {
     candidates.push({
       court: 'ON_ME',
-      weight: 15,
+      weight: ruleWeight('track.stale'),
       rule: 'track.stale',
       reason: 'nothing has happened here in over a week',
       refId: null,

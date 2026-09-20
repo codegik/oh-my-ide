@@ -4,6 +4,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { type Ask, type AttentionTrack, asks } from '@omi/core';
 import {
   encodeControl,
   encodePtyIn,
@@ -14,7 +15,8 @@ import {
   socketPath,
 } from '@omi/protocol';
 import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron';
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, Notification, shell } from 'electron';
+import { AttentionUi } from './attention.js';
 import { hasMacApp, macScriptHandler, onPath, resolveTerminal } from './terminal.js';
 
 // Hyprland/Wayland: without these Electron renders through XWayland and is blurry
@@ -25,7 +27,8 @@ app.commandLine.appendSwitch('enable-features', 'WaylandWindowDecorations');
 const DAEMON_ENTRY = path.join(__dirname, '..', '..', 'daemon', 'dist', 'index.cjs');
 const RENDERER_HTML = path.join(__dirname, '..', 'renderer', 'index.html');
 const RENDERER_URL = pathToFileURL(RENDERER_HTML).href;
-const ICON = path.join(__dirname, '..', 'assets', 'icon.png');
+const ASSETS = path.join(__dirname, '..', 'assets');
+const ICON = path.join(ASSETS, 'icon.png');
 
 /**
  * The app is one page, and the preload runs in whatever page a window shows. A
@@ -70,6 +73,8 @@ class DaemonClient {
     { resolve: (v: unknown) => void; reject: (e: Error) => void }
   >();
   welcome: unknown = null;
+  /** Set by whoever cares that a track moved; the tray does. */
+  onChanged: () => void = () => void 0;
   private welcomeReady!: Promise<unknown>;
   private resolveWelcome!: (v: unknown) => void;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -146,6 +151,9 @@ class DaemonClient {
     }
     if (msg.t === 'changed' || msg.t === 'pty.exit') {
       for (const w of BrowserWindow.getAllWindows()) w.webContents.send('omi:event', msg);
+      // The tray has to hear this even with no window to send it to — that is
+      // the whole point of it.
+      if (msg.t === 'changed') this.onChanged();
       return;
     }
     const id = typeof msg.id === 'number' ? msg.id : -1;
@@ -368,6 +376,111 @@ function osFontPx(key: 'font-name' | 'monospace-font-name'): number | null {
   }
 }
 
+// ── attention: the tray, the notifier, and the way back in ──────────────────
+
+/**
+ * The window, kept rather than looked up, because with a tray it stops being
+ * disposable: closing it HIDES it. A hidden window keeps every terminal alive
+ * and repaints instantly when you come back, where a re-created one would
+ * re-attach and replay every session you had open.
+ */
+let mainWindow: BrowserWindow | null = null;
+let ui: AttentionUi | null = null;
+/** Set only by a real quit, so `close` knows whether it means hide or exit. */
+let quitting = false;
+
+const SETTING_MUTED = 'tray.muted';
+const SETTING_HINTED = 'tray.close_hint_seen';
+
+async function getSetting(key: string): Promise<string | null> {
+  const r = (await client.rpc('settings.get', { key }).catch(() => null)) as {
+    value?: string | null;
+  } | null;
+  return r?.value ?? null;
+}
+const setSetting = (key: string, value: string) =>
+  client.rpc('settings.set', { key, value }).catch(() => void 0);
+
+function showWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  if (!mainWindow.isVisible()) mainWindow.show();
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+}
+
+/**
+ * The end of every path through this feature: the tray menu, a click on a
+ * notification, and the tray icon itself all land here. Raise the window, then
+ * tell the renderer which track and which session to put on screen — naming the
+ * session matters, because a track holding four conversations and opening on
+ * the wrong one is barely better than not opening at all.
+ */
+function focusAsk(ask: Ask): void {
+  showWindow();
+  const send = () =>
+    mainWindow?.webContents.send('omi:focus', {
+      trackId: ask.trackId,
+      sessionId: ask.sessionId,
+    });
+  // A window created by this very click has no renderer listening yet.
+  if (mainWindow?.webContents.isLoading()) mainWindow.webContents.once('did-finish-load', send);
+  else send();
+}
+
+/**
+ * Re-reads what is asking and hands it to the tray. Driven by the daemon's
+ * `changed` broadcasts, never a timer: the daemon already watches the sessions
+ * and now also reports courts that moved on the clock alone, so a poll here
+ * would only be a slower copy of something that already happened.
+ */
+async function refreshAttention(): Promise<void> {
+  if (!ui) return;
+  const tracks = (await client.rpc('tracks.list').catch(() => null)) as AttentionTrack[] | null;
+  // A failed call is a hiccup in one socket round trip, not "nothing is
+  // waiting" — dropping the badge on it would be a lie in the safe-looking
+  // direction, which is the worst kind for a notifier.
+  if (!tracks) return;
+  const waiting = asks(tracks);
+  ui.update(waiting);
+  app.setBadgeCount(waiting.length);
+}
+
+async function createTray(): Promise<void> {
+  const muted = (await getSetting(SETTING_MUTED)) === '1';
+  ui = new AttentionUi({
+    assets: ASSETS,
+    muted,
+    onOpen: focusAsk,
+    onShow: showWindow,
+    onMuteChange: (m) => void setSetting(SETTING_MUTED, m ? '1' : '0'),
+    onQuit: () => {
+      quitting = true;
+      app.quit();
+    },
+  });
+  await refreshAttention();
+}
+
+/**
+ * Closing the window used to quit, and with a tray that would be a tray that
+ * dies exactly when it starts being useful. So the window hides instead — but
+ * silently swallowing a close is the kind of thing that reads as a crash, so
+ * the first time it happens, say so. Once, ever.
+ */
+async function hintAtTray(): Promise<void> {
+  if ((await getSetting(SETTING_HINTED)) === '1') return;
+  void setSetting(SETTING_HINTED, '1');
+  if (!Notification.isSupported()) return;
+  new Notification({
+    title: 'oh-my-ide is still running',
+    body: 'Your sessions keep going. Open it again from the tray icon, or quit it from there.',
+    icon: ICON,
+  }).show();
+}
+
 function createWindow(): void {
   const uiPx = osFontPx('font-name');
   const monoPx = osFontPx('monospace-font-name');
@@ -396,6 +509,14 @@ function createWindow(): void {
   // steal keys the terminals need (Ctrl+R reloads, Ctrl+W closes the window).
   // macOS keeps it: it lives in the system bar and carries Cmd+C/V/Q there.
   if (process.platform !== 'darwin') win.removeMenu();
+  // Hide rather than close, so long as there is a tray to get back in from.
+  win.on('close', (e) => {
+    if (quitting || !ui) return;
+    e.preventDefault();
+    win.hide();
+    void hintAtTray();
+  });
+  mainWindow = win;
   void win.loadFile(RENDERER_HTML);
 }
 
@@ -435,11 +556,40 @@ app.whenReady().then(async () => {
     client.retryLater();
   }
   createWindow();
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
+  // The tray comes up after the window so a first run paints before anything
+  // touches the panel; a failure here must not cost you the app, only the icon.
+  client.onChanged = () => void refreshAttention();
+  try {
+    await createTray();
+  } catch (err) {
+    process.stderr.write(
+      `[desktop] no tray: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  }
+  app.on('activate', () => showWindow());
 });
+
+/**
+ * Launching it again — from a menu, a keybind, the .desktop entry — must raise
+ * the window that is already running, not start a second copy. Without the
+ * tray this barely came up, because closing the window ended the app; with it,
+ * a hidden window is the normal state and a second instance would be a second
+ * tray icon fighting the first one for the panel.
+ */
+if (!app.requestSingleInstanceLock()) app.quit();
+app.on('second-instance', () => showWindow());
 
 // Quitting must NOT stop the daemon, and closing a terminal view must not stop a
 // Claude session. That is the whole point of the architecture.
-app.on('window-all-closed', () => app.quit());
+//
+// The window closing is no longer the app ending, either: while the tray is up
+// it is the app going quiet, still watching, which is the only way it can tell
+// you a session finished while you were somewhere else.
+app.on('window-all-closed', () => {
+  if (!ui) app.quit();
+});
+app.on('before-quit', () => {
+  quitting = true;
+  ui?.destroy();
+  ui = null;
+});

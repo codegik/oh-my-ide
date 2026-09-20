@@ -490,11 +490,12 @@ export class Db {
   // ── court ─────────────────────────────────────────────────────────────────
 
   /** Recomputes and caches the derived court. The rules themselves are pure. */
-  recomputeCourt(id: number): void {
+  /** True when the derived answer moved, which is the only thing worth telling anyone about. */
+  recomputeCourt(id: number): boolean {
     const row = this.db.prepare('SELECT * FROM track WHERE id = ?').get(id) as
       | Record<string, unknown>
       | undefined;
-    if (!row) return;
+    if (!row) return false;
 
     const pinRow = this.db
       .prepare('SELECT * FROM status_pin WHERE track_id = ? AND released_at IS NULL')
@@ -547,14 +548,50 @@ export class Db {
         Date.now(),
         id,
       );
+    // Not just the court: a track can stay ON_ME while the reason under it
+    // changes — a second session starts asking, a pin is released — and the
+    // rail's why-popover and the tray's wording are both reading that reason.
+    return (
+      e.court !== row.court || e.derivation.rule !== row.court_rule || e.source !== row.court_source
+    );
   }
 
-  recomputeAll(): void {
+  /**
+   * The ids whose derived answer moved. Time alone changes a court — a snooze
+   * runs out, a track goes stale — with no session state behind it to announce,
+   * so the tick that calls this is the only chance anyone has to hear about it.
+   */
+  recomputeAll(): number[] {
+    const moved: number[] = [];
     for (const r of this.db.prepare('SELECT id FROM track WHERE closed_at IS NULL').all() as {
       id: number;
     }[]) {
-      this.recomputeCourt(r.id);
+      if (this.recomputeCourt(r.id)) moved.push(r.id);
     }
+    return moved;
+  }
+
+  // ── settings ────────────────────────────────────────────────────────
+
+  /**
+   * A handful of small choices that have to survive a restart — whether the
+   * tray is allowed to interrupt you, and whatever joins it later. The table
+   * has been in the schema since migration 0001; these are its first users.
+   */
+  getSetting(key: string): string | null {
+    const row = this.db.prepare('SELECT value FROM setting WHERE key = ?').get(key) as
+      | { value: string }
+      | undefined;
+    return row?.value ?? null;
+  }
+
+  setSetting(key: string, value: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO setting (key, value, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      )
+      .run(key, value, Date.now());
   }
 
   pin(trackId: number, court: Court, kind: 'hard' | 'snooze' | 'park', expiresAt?: number): void {

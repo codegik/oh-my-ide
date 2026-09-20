@@ -25,4 +25,7 @@ contextBridge.exposeInMainWorld('omi', {
       cb(viewId, epoch, offset, bytes),
     ),
   onEvent: (cb: (msg: unknown) => void) => ipcRenderer.on('omi:event', (_e, msg) => cb(msg)),
+  /** The tray or a notification asking for a track — and a session inside it — on screen. */
+  onFocus: (cb: (at: { trackId: number; sessionId: string | null }) => void) =>
+    ipcRenderer.on('omi:focus', (_e, at) => cb(at)),
 });

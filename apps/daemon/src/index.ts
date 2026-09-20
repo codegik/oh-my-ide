@@ -482,6 +482,20 @@ const methods: Record<string, Handler> = {
     return db.notes(Number(p.id));
   },
 
+  // ── settings ──────────────────────────────────────────────────────────────
+  /**
+   * Small choices that outlive a window. The daemon holds them because it holds
+   * the database, and because the one that exists so far — whether the tray may
+   * interrupt you — has to be readable before the first window opens.
+   */
+  'settings.get': async (p) => ({ value: db.getSetting(String(p.key ?? '')) }),
+  'settings.set': async (p) => {
+    const key = String(p.key ?? '').trim();
+    if (!key) throw new Error('a key is required');
+    db.setSetting(key, String(p.value ?? ''));
+    return { ok: true };
+  },
+
   // ── pty ───────────────────────────────────────────────────────────────────
   /**
    * Opens a view onto an EXISTING Claude session via `claude attach`. Attach is
@@ -643,7 +657,11 @@ async function main(): Promise<void> {
   // with no UI open. This is the main reason a daemon exists at all.
   setInterval(() => {
     void syncSessions().catch(() => void 0);
-    db.recomputeAll();
+    // A court that moved on the clock alone has nothing else to announce it, so
+    // this tick is the only thing that can. Without it the rail and the tray sit
+    // on a value that stopped being true minutes ago.
+    const moved = db.recomputeAll();
+    if (moved.length > 0) broadcast({ t: 'changed', entity: 'track', ids: moved });
   }, 5000).unref();
 
   const shutdown = () => {

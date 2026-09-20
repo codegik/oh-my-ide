@@ -18,6 +18,7 @@ declare global {
       ptyInput(viewId: string, bytes: Uint8Array): void;
       onPty(cb: (viewId: string, epoch: number, offset: string, bytes: Uint8Array) => void): void;
       onEvent(cb: (msg: any) => void): void;
+      onFocus(cb: (at: { trackId: number; sessionId: string | null }) => void): void;
       osFont: { ui: number | null; mono: number | null };
     };
   }
@@ -318,6 +319,40 @@ window.omi.onEvent((msg) => {
     void refresh();
   }
 });
+
+/**
+ * The tray and its notifications end here: something out there is waiting, and
+ * this is the window putting it in front of you.
+ *
+ * Held rather than acted on immediately, because the click that raised the
+ * window can easily beat this file's own startup — and `boot` restores the tab
+ * set from localStorage, which would quietly undo a tab opened before it ran.
+ * Whoever finishes last applies it.
+ */
+let pendingFocus: { trackId: number; sessionId: string | null } | null = null;
+let booted = false;
+
+window.omi.onFocus((at) => {
+  pendingFocus = at;
+  void applyFocus();
+});
+
+async function applyFocus() {
+  if (!booted) return;
+  const at = pendingFocus;
+  if (!at) return;
+  pendingFocus = null;
+  // The tray reads the daemon directly, so it can name a track this window has
+  // not heard of yet.
+  if (!trackById(at.trackId)) await refresh().catch(() => void 0);
+  if (!trackById(at.trackId)) return;
+  // The session matters as much as the track: landing on a track with four
+  // conversations and showing the wrong one is barely better than not opening.
+  if (at.sessionId) activeSession[at.trackId] = at.sessionId;
+  openTrack(at.trackId);
+  document.querySelector('.titem.sel')?.scrollIntoView({ block: 'nearest' });
+  document.querySelector('.sess.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
 
 // ── sessions ────────────────────────────────────────────────────────────────
 
@@ -2817,6 +2852,10 @@ async function boot() {
   }, 5000);
 
   focusTerminal();
+  // Last, so a tray click that arrived mid-boot lands on the restored tab set
+  // rather than under it.
+  booted = true;
+  void applyFocus();
 }
 
 void boot();

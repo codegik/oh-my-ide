@@ -11,7 +11,7 @@ export default defineConfig([
     clean: true,
     outExtension: () => ({ js: '.cjs' }),
     external: ['electron'],
-    noExternal: ['@omi/protocol', 'zod'],
+    noExternal: ['@omi/core', '@omi/protocol', 'zod'],
   },
   {
     // Renderer: browser platform, IIFE, xterm bundled in. It has no Node at all.

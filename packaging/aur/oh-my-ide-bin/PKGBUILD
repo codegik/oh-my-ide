@@ -20,7 +20,8 @@ depends=('alsa-lib' 'at-spi2-core' 'bash' 'cairo' 'dbus' 'expat' 'glib2' 'glibc'
          'libcups' 'libgcc' 'libstdc++' 'libx11' 'libxcb' 'libxcomposite' 'libxdamage'
          'libxext' 'libxfixes' 'libxkbcommon' 'libxrandr' 'nspr' 'nss' 'pango' 'systemd-libs')
 optdepends=('claude-code: the Claude Code CLI the app drives (or install it your own way)'
-            'libnotify: a desktop notification when a launch from the menu fails')
+            'libnotify: desktop notifications, including the one telling you a session is waiting'
+            'libayatana-appindicator: the tray icon (without it there is no tray on Wayland)')
 provides=("$_pkgname")
 conflicts=("$_pkgname")
 # Electron's binaries ship stripped; stripping again can break them.

@@ -154,11 +154,46 @@ exists mostly to collapse that into one shape.
 
 Working: track CRUD, paste-to-link (GitHub/Slack/Jira/path/URL, pure regex),
 attach a background session with a live interactive terminal, derived court with
-a why-popover and pins, merged timeline, notes, tabs that survive restart.
+a why-popover and pins, merged timeline, notes, tabs that survive restart, and a
+tray icon with notifications (below).
 
 Not built: the `gh` poller (**so PR refs have no live state and no `gh.*` court
 rule can ever fire**), branch-based auto-join, the triage inbox, Slack/Jira/
-Calendar, notifications, log persistence/replay beyond the in-memory ring.
+Calendar, quiet hours, log persistence/replay beyond the in-memory ring.
+
+### The tray, and what closing the window now means
+
+`packages/core/src/attention.ts` turns courts back into individual **asks** —
+one per (track, session) rather than one per track, because a track's court is a
+single value and a second session asking while the first already is would
+otherwise be invisible. `apps/desktop/src/tray.ts` decides what the tray says;
+`attention.ts` next to it is the only file that touches Electron's `Tray` and
+`Notification`.
+
+Three rules there are deliberate, and each one is a notifier-fatigue fix:
+
+- **Only edges notify.** An ask that was there last poll has been announced.
+- **One per session per five minutes**, EXCEPT that a strictly more urgent ask
+  about the same session breaks the cooldown — a rate limit that hides a
+  permission prompt behind a turn-end is worse than no rate limit.
+- **`track.stale` never notifies.** A week of silence is true at an arbitrary
+  second and urgent at none of them; the icon carries it instead.
+
+**Closing the window no longer quits the app** — it hides it, and the tray keeps
+watching. That is the whole point: a session that finishes while you are in a
+meeting can only reach you if something outlived the window. Quit is in the tray
+menu, and `before-quit` is what tells a close it means exit. This is also why
+there is now a single-instance lock: a hidden window is a normal state, and a
+second launch would otherwise fight the first for the panel.
+
+Electron needs **libayatana-appindicator** for a tray on Wayland; without it
+there is silently no icon. It is an `optdepends` in the PKGBUILD for that reason.
+
+The tray reads the daemon itself rather than the renderer — there may be no
+renderer — which is why the daemon's 5-second tick now broadcasts `changed` for
+courts that moved on the clock alone (`Db.recomputeAll` returns those ids). It
+used to move them silently, so the rail could sit on a value that had stopped
+being true.
 
 ### Known deviations from PLAN.md
 

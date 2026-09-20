@@ -52,6 +52,9 @@ const FILES = [
   ['apps/desktop/renderer/bundle.js', 'app/renderer/bundle.js'],
   ['apps/desktop/renderer/xterm.css', 'app/renderer/xterm.css'],
   ['apps/desktop/assets/icon.png', 'app/assets/icon.png'],
+  // The tray flies one of these from the moment the app starts.
+  ['apps/desktop/assets/tray-idle.png', 'app/assets/tray-idle.png'],
+  ['apps/desktop/assets/tray-attention.png', 'app/assets/tray-attention.png'],
   ['apps/daemon/dist/index.cjs', 'daemon/dist/index.cjs'],
 ];
 // The daemon bundle keeps these external (apps/daemon/tsup.config.ts). Neither
