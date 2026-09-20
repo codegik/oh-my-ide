@@ -27,9 +27,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # package-manager-cache defaults to true in v5, and it caches by running
+      # the manager named in package.json — pnpm, which corepack installs two
+      # steps below. So the default fails before pnpm exists. The job installs
+      # from a frozen lockfile and rebuilds native modules anyway, so the cache
+      # buys little; not worth reordering the job around.
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          package-manager-cache: false
 
       - name: Check the tag matches package.json
         id: version
