@@ -16,7 +16,12 @@ function slug(cwd: string): string {
   return cwd.replace(/[/.]/g, '-');
 }
 
-function writeTranscript(cwd: string, sessionId: string, lines: unknown[], mtimeMs?: number): string {
+function writeTranscript(
+  cwd: string,
+  sessionId: string,
+  lines: unknown[],
+  mtimeMs?: number,
+): string {
   const dir = path.join(HOME, 'projects', slug(cwd));
   mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${sessionId}.jsonl`);
@@ -59,7 +64,12 @@ describe('pastSessionsFor', () => {
     // point of verifying identity from inside the file, not the slug.
     const wrongCwd = '/tmp/a-b';
     writeTranscript(wrongCwd, '22222222-2222-3333-4444-555555555555', [
-      { type: 'user', message: { role: 'user', content: 'x' }, cwd: wrongCwd, sessionId: '22222222-2222-3333-4444-555555555555' },
+      {
+        type: 'user',
+        message: { role: 'user', content: 'x' },
+        cwd: wrongCwd,
+        sessionId: '22222222-2222-3333-4444-555555555555',
+      },
     ]);
     expect(pastSessionsFor('/tmp/a/b')).toEqual([]);
   });
@@ -68,7 +78,11 @@ describe('pastSessionsFor', () => {
     const cwd = '/tmp/omi-fixture-nocwd';
     writeTranscript(cwd, '33333333-2222-3333-4444-555555555555', [
       { type: 'mode', mode: 'normal', sessionId: '33333333-2222-3333-4444-555555555555' },
-      { type: 'last-prompt', lastPrompt: 'no cwd anywhere here', sessionId: '33333333-2222-3333-4444-555555555555' },
+      {
+        type: 'last-prompt',
+        lastPrompt: 'no cwd anywhere here',
+        sessionId: '33333333-2222-3333-4444-555555555555',
+      },
     ]);
     expect(pastSessionsFor(cwd)).toEqual([]);
   });
@@ -77,7 +91,12 @@ describe('pastSessionsFor', () => {
     const cwd = '/tmp/omi-fixture-preview';
     const long = `line one\nline two ${'x'.repeat(200)}`;
     writeTranscript(cwd, '44444444-2222-3333-4444-555555555555', [
-      { type: 'user', message: { role: 'user', content: 'the head message, not the preview' }, cwd, sessionId: '44444444-2222-3333-4444-555555555555' },
+      {
+        type: 'user',
+        message: { role: 'user', content: 'the head message, not the preview' },
+        cwd,
+        sessionId: '44444444-2222-3333-4444-555555555555',
+      },
       { type: 'last-prompt', lastPrompt: long, sessionId: '44444444-2222-3333-4444-555555555555' },
     ]);
     const found = pastSessionsFor(cwd);
@@ -92,7 +111,12 @@ describe('pastSessionsFor', () => {
   it('falls back to the first head user message when there is no last-prompt line', () => {
     const cwd = '/tmp/omi-fixture-fallback';
     writeTranscript(cwd, '55555555-2222-3333-4444-555555555555', [
-      { type: 'user', message: { role: 'user', content: 'first real message here' }, cwd, sessionId: '55555555-2222-3333-4444-555555555555' },
+      {
+        type: 'user',
+        message: { role: 'user', content: 'first real message here' },
+        cwd,
+        sessionId: '55555555-2222-3333-4444-555555555555',
+      },
     ]);
     const found = pastSessionsFor(cwd);
     expect(found).toHaveLength(1);
@@ -108,7 +132,13 @@ describe('pastSessionsFor', () => {
       pad: `MIDDLE_SENTINEL_${i}_${'z'.repeat(80)}`,
     }));
     writeTranscript(cwd, sessionId, [
-      { type: 'user', message: { role: 'user', content: 'head message' }, cwd, sessionId, gitBranch: 'feature/x' },
+      {
+        type: 'user',
+        message: { role: 'user', content: 'head message' },
+        cwd,
+        sessionId,
+        gitBranch: 'feature/x',
+      },
       ...filler,
       { type: 'last-prompt', lastPrompt: 'tail message', sessionId },
     ]);
@@ -123,12 +153,32 @@ describe('pastSessionsFor', () => {
   it('sorts by last activity, newest first', () => {
     const cwd = '/tmp/omi-fixture-sort';
     const now = Date.now();
-    writeTranscript(cwd, '77777777-2222-3333-4444-555555555555', [
-      { type: 'user', message: { role: 'user', content: 'older' }, cwd, sessionId: '77777777-2222-3333-4444-555555555555' },
-    ], now - 60_000);
-    writeTranscript(cwd, '88888888-2222-3333-4444-555555555555', [
-      { type: 'user', message: { role: 'user', content: 'newer' }, cwd, sessionId: '88888888-2222-3333-4444-555555555555' },
-    ], now);
+    writeTranscript(
+      cwd,
+      '77777777-2222-3333-4444-555555555555',
+      [
+        {
+          type: 'user',
+          message: { role: 'user', content: 'older' },
+          cwd,
+          sessionId: '77777777-2222-3333-4444-555555555555',
+        },
+      ],
+      now - 60_000,
+    );
+    writeTranscript(
+      cwd,
+      '88888888-2222-3333-4444-555555555555',
+      [
+        {
+          type: 'user',
+          message: { role: 'user', content: 'newer' },
+          cwd,
+          sessionId: '88888888-2222-3333-4444-555555555555',
+        },
+      ],
+      now,
+    );
     const sessions = pastSessionsFor(cwd);
     expect(sessions.map((s) => s.sessionId)).toEqual([
       '88888888-2222-3333-4444-555555555555',

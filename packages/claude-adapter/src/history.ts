@@ -32,7 +32,10 @@ function candidateSlug(cwd: string): string {
 }
 
 /** A line straddling a chunk boundary parses as garbage; drop it, never guess. */
-function parseLines(chunk: string, opts: { dropFirst: boolean; dropLast: boolean }): Record<string, unknown>[] {
+function parseLines(
+  chunk: string,
+  opts: { dropFirst: boolean; dropLast: boolean },
+): Record<string, unknown>[] {
   const lines = chunk.split('\n');
   if (opts.dropFirst) lines.shift();
   if (opts.dropLast) lines.pop();
@@ -84,7 +87,10 @@ function readSession(file: string, wantCwd: string): PastSession | null {
     const headLen = Math.min(HEAD_BYTES, st.size);
     const headBuf = Buffer.alloc(headLen);
     fs.readSync(fd, headBuf, 0, headLen, 0);
-    const head = parseLines(headBuf.toString('utf8'), { dropFirst: false, dropLast: st.size > headLen });
+    const head = parseLines(headBuf.toString('utf8'), {
+      dropFirst: false,
+      dropLast: st.size > headLen,
+    });
 
     let tail: Record<string, unknown>[] = [];
     if (st.size > HEAD_BYTES) {

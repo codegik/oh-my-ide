@@ -355,7 +355,8 @@ const methods: Record<string, Handler> = {
       // track's own folder actually claims that id — a cheap, local,
       // read-only check before any id reaches `claude --bg --resume`.
       const cwdForResume = track.cwd ?? undefined;
-      const known = cwdForResume && pastSessionsFor(cwdForResume).some((h) => h.sessionId === p.sessionId);
+      const known =
+        cwdForResume && pastSessionsFor(cwdForResume).some((h) => h.sessionId === p.sessionId);
       if (!known) throw new Error('no such session');
       const started = await runner.resume({ sessionId: String(p.sessionId), cwd: cwdForResume });
       sessionId = started.sessionId;

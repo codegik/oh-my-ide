@@ -126,7 +126,12 @@ describe('dropStaleInteractiveSessions', () => {
   it('drops an interactive row whose terminal has already closed', () => {
     const { pid: dead } = spawnSync('true');
     const sessions = [
-      normalizeRow({ sessionId: 'aaaaaaaa-0000-0000-0000-000000000000', cwd: '/x', kind: 'interactive', pid: dead }),
+      normalizeRow({
+        sessionId: 'aaaaaaaa-0000-0000-0000-000000000000',
+        cwd: '/x',
+        kind: 'interactive',
+        pid: dead,
+      }),
     ];
     expect(dropStaleInteractiveSessions(sessions)).toEqual([]);
   });
@@ -146,7 +151,12 @@ describe('dropStaleInteractiveSessions', () => {
   it('never checks a background row, whose lifecycle the CLI already tracks', () => {
     const { pid: dead } = spawnSync('true');
     const sessions = [
-      normalizeRow({ sessionId: 'aaaaaaaa-0000-0000-0000-000000000000', cwd: '/x', kind: 'background', pid: dead }),
+      normalizeRow({
+        sessionId: 'aaaaaaaa-0000-0000-0000-000000000000',
+        cwd: '/x',
+        kind: 'background',
+        pid: dead,
+      }),
     ];
     expect(dropStaleInteractiveSessions(sessions)).toHaveLength(1);
   });

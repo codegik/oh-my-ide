@@ -427,7 +427,8 @@ function renderRail() {
 
   $('railbody').innerHTML =
     tracks.length === 0 && !doneOpen
-      ? '<div class="empty">No tracks yet.<br><br>Press <b>+ new track</b> to make one.</div>' + done
+      ? '<div class="empty">No tracks yet.<br><br>Press <b>+ new track</b> to make one.</div>' +
+        done
       : `<div class="railhead">
          <span>${tracks.length} open</span>
          ${
