@@ -263,11 +263,17 @@ cmd_cut() {
     die "tag v$version already exists"
   fi
   current="$(node -p 'require("./package.json").version')"
-  [ "$version" != "$current" ] || die "package.json is already $version"
   git fetch -q origin main
   [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] ||
     die "main and origin/main differ; pull or push first"
-  echo "  ${G}ok${N} $current -> $version from a clean main"
+  # Releasing the version package.json already carries is normal for the first
+  # release of it: only the tag decides whether a version is actually out, and
+  # that is checked above. There is just nothing to bump.
+  if [ "$version" = "$current" ]; then
+    echo "  ${G}ok${N} tagging $version, already the version in package.json"
+  else
+    echo "  ${G}ok${N} $current -> $version from a clean main"
+  fi
 
   # Not fatal: the GitHub release and the attached package still go out, only
   # the repo does not. Say it plainly rather than let it be a surprise warning
@@ -286,20 +292,26 @@ cmd_cut() {
 
   echo
   echo "${B}About to release $version:${N}"
-  echo "  bump package.json, commit, tag v$version, push main and the tag"
+  if [ "$version" = "$current" ]; then
+    echo "  tag v$version, push main and the tag"
+  else
+    echo "  bump package.json, commit, tag v$version, push main and the tag"
+  fi
   echo "  CI then publishes the tarball, the signed package, and the pacman repo"
   if [ "$assume_yes" -eq 0 ]; then
     confirm "go?" || { echo "nothing changed"; exit 1; }
   fi
 
-  step "bumping and tagging"
-  # The first "version" in the root package.json is the package's own, on line 3.
-  node -e '
-    const fs = require("node:fs");
-    const s = fs.readFileSync("package.json", "utf8");
-    fs.writeFileSync("package.json", s.replace(/("version":\s*")[^"]+(")/, `$1${process.argv[1]}$2`));
-  ' "$version"
-  git commit -q -am "Release $version"
+  step "tagging"
+  if [ "$version" != "$current" ]; then
+    # The first "version" in the root package.json is the package's own, on line 3.
+    node -e '
+      const fs = require("node:fs");
+      const s = fs.readFileSync("package.json", "utf8");
+      fs.writeFileSync("package.json", s.replace(/("version":\s*")[^"]+(")/, `$1${process.argv[1]}$2`));
+    ' "$version"
+    git commit -q -am "Release $version"
+  fi
   git tag "v$version"
 
   step "pushing"
