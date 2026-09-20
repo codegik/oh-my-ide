@@ -1935,12 +1935,11 @@ function onPickerKey(e: KeyboardEvent) {
  * before you know where to look for one.
  */
 interface Wizard {
-  title: string;
   cwd: string | null;
   picked: Set<string>;
   fresh: boolean;
   busy: string | null;
-  /** Focus belongs to the user once they have started typing. */
+  /** Focus is taken once, on open, and belongs to the user after that. */
   focused: boolean;
   /** Sessions that ran in `cwd` before but aren't live now — fetched on demand. */
   past: any[];
@@ -1981,7 +1980,6 @@ function openWizard() {
   archiveSheet = null;
   keysSheet = false;
   wizard = {
-    title: '',
     cwd: null,
     picked: new Set(),
     fresh: false,
@@ -2005,9 +2003,6 @@ function renderWizard() {
   host.innerHTML = `
     <form class="sheet" id="wiz">
       <div class="whead">NEW TRACK</div>
-
-      <label class="wlab">what is the question? <span class="muted">— optional</span></label>
-      <input id="wtitle" value="${esc(w.title)}" placeholder="a question works best, but you can name it later…" />
 
       <label class="wlab">folder</label>
       <div class="wrow">
@@ -2070,18 +2065,13 @@ function renderWizard() {
     </form>`;
 
   /**
-   * The title is bound to state, not to the DOM: the session list can refresh
-   * under the sheet, and a re-render must not drop what was typed. Focus is
-   * taken once, for the same reason.
+   * Focus is taken once, not on every render: the session list can refresh
+   * under the sheet, and that must not yank focus back from wherever the user
+   * has moved it.
    */
-  const title = document.getElementById('wtitle') as HTMLInputElement | null;
-  if (title)
-    title.oninput = () => {
-      if (wizard) wizard.title = title.value;
-    };
   if (!w.busy && !w.focused) {
     w.focused = true;
-    $('wtitle').focus();
+    $('wpick').focus();
   }
 
   $('wpick').onclick = async () => {
@@ -2117,19 +2107,17 @@ function renderWizard() {
 async function createFromWizard() {
   const w = wizard;
   if (!w) return;
-  // The question is optional: a track is often opened to poke at a folder
-  // before there is a question worth writing down, and refusing to create one
-  // stops that. An unnamed track is named after its folder and can be renamed
-  // later; only a real question is recorded as the question.
-  const question = w.title.trim();
-  const title = question || w.cwd?.replace(/\/+$/, '').split('/').pop() || 'untitled';
+  // A track is born from its folder: the wizard asks for nothing else, because
+  // a track is usually opened to poke at a folder before there is a question
+  // worth writing down. The name is the folder's, and can be changed later.
+  const title = w.cwd?.replace(/\/+$/, '').split('/').pop() || 'untitled';
 
   w.busy = 'creating…';
   renderWizard();
 
   const track = await window.omi.rpc('tracks.create', {
     title,
-    question: question || null,
+    question: null,
     cwd: w.cwd,
   });
   for (const sessionId of w.picked) {
