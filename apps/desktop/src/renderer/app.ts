@@ -1508,14 +1508,13 @@ function checkTranscript(ext: string) {
       renderDetail();
     });
 }
-// Waking a stopped session. The daemon stops sessions nobody is using (see
-// stopIdleSessions there), so going back to one should simply bring it back —
+// Waking a stopped session. Going back to one should simply bring it back —
 // except when it stopped while on screen, where it waits for a key instead.
 // All keyed by session ref.
 
 /** The attach view a session was last shown in, to tell it stopped under us. */
 const liveViewOf = new Map<string, string>();
-/** Went to sleep while on screen; wakes on a key, not by itself. */
+/** Stopped while on screen; wakes on a key, not by itself. */
 const dozed = new Set<string>();
 /** Already woken by itself this visit, so a failed resume is not retried in a loop. */
 const autoWoke = new Set<string>();
@@ -1616,8 +1615,8 @@ function mountTerminal(t: Track, session: Ref | undefined) {
       // Its `claude attach` went with it, so opening it again has to spawn a new
       // one — onto a clean screen, since the new one repaints from scratch.
       dropPty(lastView);
-      // Stopped under the user's eyes — put to sleep for sitting idle — stays
-      // down until they ask; waking it straight back up would undo the point.
+      // Stopped under the user's eyes stays down until they ask; whatever
+      // stopped it, bringing it straight back would second-guess that.
       if (prev === lastView) dozed.add(session.externalId);
     }
     // Arriving here from anywhere else is the asking.
@@ -1691,7 +1690,7 @@ function mountTerminal(t: Track, session: Ref | undefined) {
     // and it takes those refs along instead of leaving them on a corpse.
     const asleep = dozed.has(session.externalId);
     wrap.innerHTML = `<div class="empty">
-      <b>${label}</b> ${asleep ? 'went to sleep while idle' : 'is no longer running'}.<br><br>
+      <b>${label}</b> ${asleep ? 'stopped' : 'is no longer running'}.<br><br>
       Its transcript is kept, so it can pick up where it left off${asleep ? ' — press any key to wake it' : ''}.
       <div class="deadacts">
         <button class="wbtn primary" id="resumesess">resume</button>
@@ -1738,7 +1737,7 @@ function mountTerminal(t: Track, session: Ref | undefined) {
       };
     }
     if (asleep) {
-      // A plain key, not a shortcut: Ctrl+W on a sleeping tab still closes it.
+      // A plain key, not a shortcut: Ctrl+W on a stopped tab still closes it.
       wrap.onkeydown = (e) => {
         if (e.ctrlKey || e.metaKey || e.altKey || resume.disabled) return;
         if (e.key.length !== 1 && e.key !== 'Enter') return;

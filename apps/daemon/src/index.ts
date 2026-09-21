@@ -23,7 +23,6 @@ import {
   runtimeDir,
   socketPath,
 } from '@omi/protocol';
-import { IDLE_STOP_MS, IdleWatch } from './idle.js';
 import { PtyHub } from './pty.js';
 
 const DAEMON_VERSION = '0.0.2';
@@ -58,9 +57,6 @@ fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 const runner = new ClaudeBgRunner();
 const hub = new PtyHub();
 const db = new Db(path.join(DATA_DIR, 'omid.db'));
-// Overridable so the reaper can be watched working without waiting ten minutes.
-const IDLE_MS = Number(process.env.OMI_IDLE_STOP_MS) || IDLE_STOP_MS;
-const idle = new IdleWatch(IDLE_MS);
 
 let compat: ClaudeCompat | null = null;
 let compatPromise: Promise<ClaudeCompat> | null = null;
@@ -187,10 +183,11 @@ function adoptTitle(viewId: string, title: string): void {
 
 /**
  * Claude's supervisor never stops a background session by itself, so every one
- * this app ever started would otherwise run until the next reboot. Stopping
- * keeps the transcript, and a stopped job wakes under its own id — opening its
- * tab again does that (see tracks.resumeSession) — so this frees the process
- * and nothing else.
+ * this app ever started would otherwise run until the next reboot. Only the
+ * user's say-so stops one — closing its chip, or finishing its track — and never
+ * mere idleness: a quiet session is one the user may come back to read, and it
+ * should still be there, scrollback and all. Stopping keeps the transcript, and
+ * a stopped job wakes under its own id (see tracks.resumeSession).
  *
  * The ref's state is left alone on purpose. A session that stopped while
  * waiting for a reply is still waiting for one; the track stays on the user's
@@ -202,7 +199,6 @@ async function stopSessions(targets: NormalizedSession[]): Promise<void> {
   for (const s of targets) {
     if (s.kind !== 'background' || stopping.has(s.shortId)) continue;
     stopping.add(s.shortId);
-    idle.forget(s.shortId);
     // Ours first, before its process goes: a view closed by us goes quietly,
     // where one whose `claude attach` died under it would announce an exit.
     hub.close(`claude:${s.shortId}`);
@@ -246,32 +242,6 @@ async function stopTrackSessions(trackId: number): Promise<void> {
         db.getTrack(r.trackId)?.lifecycle === 'open',
     );
   await stopSessions(await sessionsBehind(mine.filter((ext) => !elsewhere(ext))));
-}
-
-/**
- * Stops whatever has been idle too long. Runs off the daemon's tick, so it keeps
- * working with no window open — which is exactly when nobody is using them.
- */
-async function stopIdleSessions(sessions: NormalizedSession[]): Promise<void> {
-  const refs = db.listSessionRefs();
-  const ours = (s: NormalizedSession) =>
-    refs.some((r) => isSameSession(s, r.externalId.replace(/^claude:/, '')));
-  const due = idle.observe(sessions, ours, Date.now());
-  if (due.length === 0) return;
-  const targets = sessions.filter((s) => due.includes(s.shortId));
-  const minutes = Math.round(IDLE_MS / 60_000);
-  for (const s of targets) {
-    for (const r of refs) {
-      if (!isSameSession(s, r.externalId.replace(/^claude:/, ''))) continue;
-      db.addEvent({
-        trackId: r.trackId,
-        source: 'claude',
-        kind: 'session.slept',
-        title: `session "${r.label ?? s.shortId}" stopped after ${minutes} minutes idle; opening it resumes it`,
-      });
-    }
-  }
-  await stopSessions(targets);
 }
 
 /**
@@ -662,7 +632,6 @@ function handleConnection(sock: net.Socket): void {
     for (const f of frames) {
       if (f.typ === FRAME_PTY_IN) {
         hub.get(f.viewId)?.input(f.bytes);
-        idle.touch(f.viewId.replace(/^claude:/, ''), Date.now());
       } else if (f.typ === FRAME_CONTROL) {
         void dispatch(sock, f.msg as Record<string, unknown>);
       }
@@ -768,9 +737,7 @@ async function main(): Promise<void> {
   // Time-based court rules (stale, snooze expiry) need a clock that ticks even
   // with no UI open. This is the main reason a daemon exists at all.
   setInterval(() => {
-    void syncSessions()
-      .then(stopIdleSessions)
-      .catch(() => void 0);
+    void syncSessions().catch(() => void 0);
     // A court that moved on the clock alone has nothing else to announce it, so
     // this tick is the only thing that can. Without it the rail and the tray sit
     // on a value that stopped being true minutes ago.
