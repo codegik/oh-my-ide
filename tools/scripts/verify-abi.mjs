@@ -8,10 +8,10 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import electronPath from 'electron';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-// Absolute: we run the check with cwd set to the daemon, so a relative path breaks.
-const ELECTRON = path.join(ROOT, 'node_modules/electron/dist/electron');
+const ELECTRON = electronPath;
 const NATIVES = ['node-pty', 'better-sqlite3'];
 
 if (!existsSync(ELECTRON)) {

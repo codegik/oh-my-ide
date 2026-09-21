@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsup"
+    "build": "pnpm --filter @omi/daemon^... build && tsup"
   },
   "dependencies": {
     "@omi/claude-adapter": "workspace:*",
