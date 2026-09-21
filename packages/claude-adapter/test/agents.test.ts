@@ -34,6 +34,27 @@ describe('parseAgentList', () => {
     expect(inter?.state).toBe('WORKING'); // 'busy'
   });
 
+  it('reads busy from a live background row, which carries both fields', () => {
+    // Verbatim shape from v2.1.272: a woken job says `working` while idle.
+    const row = {
+      pid: 1523432,
+      id: '9e1e2568',
+      cwd: '/tmp',
+      kind: 'background',
+      startedAt: 1790018791503,
+      sessionId: '9e1e2568-7e2d-4bb4-847e-df93615d8ebc',
+      status: 'idle',
+      state: 'working',
+    };
+    const s = normalizeRow(row);
+    expect(s.state).toBe('WORKING');
+    expect(s.busy).toBe(false);
+    expect(normalizeRow({ ...row, status: 'busy' }).busy).toBe(true);
+    // A row with no process has nobody to ask.
+    const { pid: _pid, status: _status, ...stopped } = row;
+    expect(normalizeRow(stopped).busy).toBeNull();
+  });
+
   it('derives a short id when the row omits one', () => {
     const noId = sessions.find((s) => s.sessionId.startsWith('cccccccc'));
     expect(noId?.shortId).toBe('cccccccc');

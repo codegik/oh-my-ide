@@ -18,6 +18,13 @@ export interface NormalizedSession {
   state: SessionState;
   /** What the CLI actually said, kept for debugging and for unknown values. */
   rawState: string | null;
+  /**
+   * Whether the process is doing something right now, from the CLI's `status`
+   * (`busy`/`idle`). A live background row carries it next to `state`, and it is
+   * the one to trust: `state` reads `working` for a while after a stopped job is
+   * woken, though nothing is running. Null when the row has no process to ask.
+   */
+  busy: boolean | null;
   confidence: StateConfidence;
 }
 

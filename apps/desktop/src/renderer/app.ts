@@ -310,6 +310,12 @@ window.omi.onEvent((msg) => {
     void refresh();
     return;
   }
+  if (msg?.t === 'pty.exit') {
+    // The session stopped under it, most likely; the listing will say.
+    dropPty(String(msg.viewId));
+    void refresh();
+    return;
+  }
   if (msg?.t === 'reconnected') {
     // The daemon came back, which means every pty view it owned is gone. Drop
     // what we think is open and let the next render re-attach; the Terminal
@@ -1502,6 +1508,18 @@ function checkTranscript(ext: string) {
       renderDetail();
     });
 }
+// Waking a stopped session. The daemon stops sessions nobody is using (see
+// stopIdleSessions there), so going back to one should simply bring it back —
+// except when it stopped while on screen, where it waits for a key instead.
+// All keyed by session ref.
+
+/** The attach view a session was last shown in, to tell it stopped under us. */
+const liveViewOf = new Map<string, string>();
+/** Went to sleep while on screen; wakes on a key, not by itself. */
+const dozed = new Set<string>();
+/** Already woken by itself this visit, so a failed resume is not retried in a loop. */
+const autoWoke = new Set<string>();
+
 function transcriptOf(ext: string): boolean | undefined {
   const has = transcripts.get(ext);
   if (has === undefined) checkTranscript(ext);
@@ -1555,14 +1573,17 @@ function mountTerminal(t: Track, session: Ref | undefined) {
   const has = session && !live ? transcriptOf(session.externalId) : undefined;
   const key = viewId ?? `none:${session?.externalId ?? ''}:${live?.kind ?? ''}:${has ?? ''}`;
   if (m.viewId === key) return;
+  const prev = m.viewId;
   m.viewId = key;
 
   const wrap = $('termwrap');
   // The element is only detached, never disposed: its Terminal keeps its
   // scrollback so coming back to this session is instant.
   wrap.replaceChildren();
+  wrap.onkeydown = null;
 
   if (session && viewId) {
+    liveViewOf.set(session.externalId, viewId);
     const v = termFor(viewId);
     wrap.appendChild(v.el);
     // Fit BEFORE opening: the pty is spawned with whatever cols/rows we pass,
@@ -1590,6 +1611,20 @@ function mountTerminal(t: Track, session: Ref | undefined) {
       (x) => x.kind !== 'claude_session' && x.sessionId === session.externalId,
     ).length;
     const refCount = `${holds} ref${holds === 1 ? '' : 's'}`;
+    const lastView = liveViewOf.get(session.externalId);
+    if (lastView) {
+      // Its `claude attach` went with it, so opening it again has to spawn a new
+      // one — onto a clean screen, since the new one repaints from scratch.
+      dropPty(lastView);
+      // Stopped under the user's eyes — put to sleep for sitting idle — stays
+      // down until they ask; waking it straight back up would undo the point.
+      if (prev === lastView) dozed.add(session.externalId);
+    }
+    // Arriving here from anywhere else is the asking.
+    if (prev !== lastView && !prev?.startsWith(`none:${session.externalId}:`)) {
+      dozed.delete(session.externalId);
+      autoWoke.delete(session.externalId);
+    }
     if (has === undefined) {
       // Asking the daemon takes a moment; offering resume meanwhile would be a
       // promise the answer may take back.
@@ -1604,13 +1639,16 @@ function mountTerminal(t: Track, session: Ref | undefined) {
     const fail = (err: unknown) => {
       // The view is keyed on the session, so it is not rebuilt on its own; put
       // the buttons back so the user can try again or take the other way out.
-      m.viewId = null;
+      // Still this session's key, so the rebuild does not count as arriving.
+      m.viewId = `none:${session.externalId}:failed`;
       renderDetail();
       const el = document.getElementById('deaderr');
       if (el) el.textContent = (err as Error).message;
     };
     /** Puts the session that just started on screen. */
     const land = async (r: any) => {
+      autoWoke.delete(session.externalId);
+      dozed.delete(session.externalId);
       if (r?.session?.sessionId) activeSession[t.id] = `claude:${r.session.sessionId}`;
       saveTabs();
       await refresh();
@@ -1651,9 +1689,10 @@ function mountTerminal(t: Track, session: Ref | undefined) {
     // A stopped session is not a dead end. Resuming keeps its id, so the refs it
     // holds stay put; starting over is the fallback when resume will not take,
     // and it takes those refs along instead of leaving them on a corpse.
+    const asleep = dozed.has(session.externalId);
     wrap.innerHTML = `<div class="empty">
-      <b>${label}</b> is no longer running.<br><br>
-      Its transcript is kept, so it can pick up where it left off.
+      <b>${label}</b> ${asleep ? 'went to sleep while idle' : 'is no longer running'}.<br><br>
+      Its transcript is kept, so it can pick up where it left off${asleep ? ' — press any key to wake it' : ''}.
       <div class="deadacts">
         <button class="wbtn primary" id="resumesess">resume</button>
         ${
@@ -1665,7 +1704,8 @@ function mountTerminal(t: Track, session: Ref | undefined) {
       </div>
       <div class="deaderr muted" id="deaderr"></div>
       </div>`;
-    $<HTMLButtonElement>('resumesess').onclick = async (e) => {
+    const resume = $<HTMLButtonElement>('resumesess');
+    resume.onclick = async (e) => {
       busy(e.currentTarget as HTMLButtonElement, 'resuming…');
       try {
         await land(
@@ -1696,6 +1736,23 @@ function mountTerminal(t: Track, session: Ref | undefined) {
           fail(err);
         }
       };
+    }
+    if (asleep) {
+      // A plain key, not a shortcut: Ctrl+W on a sleeping tab still closes it.
+      wrap.onkeydown = (e) => {
+        if (e.ctrlKey || e.metaKey || e.altKey || resume.disabled) return;
+        if (e.key.length !== 1 && e.key !== 'Enter') return;
+        e.preventDefault();
+        resume.click();
+      };
+      const el = document.activeElement;
+      wrap.tabIndex = -1;
+      if (!el || el === document.body || wrap.contains(el)) wrap.focus();
+    } else if (!autoWoke.has(session.externalId)) {
+      // Once per visit: if resume fails, the panel says why and waits, rather
+      // than trying again on every render.
+      autoWoke.add(session.externalId);
+      resume.click();
     }
     return;
   }
@@ -2519,6 +2576,10 @@ function closeModal() {
 // ── pty ─────────────────────────────────────────────────────────────────────
 
 const openedPtys = new Set<string>();
+/** Forgets a view whose `claude attach` is gone, so the next open spawns a new one. */
+function dropPty(viewId: string) {
+  if (openedPtys.delete(viewId)) terms.get(viewId)?.term.reset();
+}
 async function openPty(shortId: string, viewId: string, cwd: string | null) {
   if (openedPtys.has(viewId)) return;
   openedPtys.add(viewId);

@@ -106,6 +106,7 @@ export function normalizeRow(row: AgentRow): NormalizedSession {
     pid: row.pid ?? null,
     state,
     rawState: raw,
+    busy: row.status ? row.status.toLowerCase() === 'busy' : null,
     // The CLI told us directly, so this is the strongest confidence we ever have.
     confidence: 'observed',
   };
