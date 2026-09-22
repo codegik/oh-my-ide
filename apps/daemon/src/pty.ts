@@ -21,6 +21,8 @@ export class TitleScanner {
   /** Longest title we will assemble; past that it is not a title. */
   private static readonly MAX = 256;
   private buf: string | null = null;
+  /** Digits of the OSC Ps code, while still being read; null once validated. */
+  private ps: string | null = null;
   /** Set when the last byte was ESC, which may begin OSC or end it (ESC \\). */
   private sawEsc = false;
 
@@ -32,14 +34,27 @@ export class TitleScanner {
         // Waiting for the "ESC ] 0 ;" / "ESC ] 2 ;" opener.
         if (this.sawEsc && ch === ']') {
           this.buf = '';
+          this.ps = '';
           this.sawEsc = false;
           continue;
         }
         this.sawEsc = ch === '\x1b';
         continue;
       }
-      if (this.buf === '' && (ch === '0' || ch === '2')) continue; // the ps digit
-      if (this.buf === '' && ch === ';') continue; // and its separator
+      if (this.ps !== null) {
+        // Reading the Ps code: only 0 (icon) / 2 (window title) are a title.
+        // Anything else — e.g. an OSC 9;4 progress report — is not one of ours.
+        if (ch >= '0' && ch <= '9') {
+          this.ps += ch;
+          continue;
+        }
+        if (ch === ';' && (this.ps === '0' || this.ps === '2')) {
+          this.ps = null;
+          continue;
+        }
+        this.abandon();
+        continue;
+      }
       if (ch === '\x07') {
         done = this.finish() ?? done;
         continue;
@@ -67,12 +82,14 @@ export class TitleScanner {
   private finish(): string | null {
     const raw = this.buf ?? '';
     this.buf = null;
+    this.ps = null;
     const clean = cleanTitle(raw);
     return clean.length > 0 ? clean : null;
   }
 
   private abandon(): void {
     this.buf = null;
+    this.ps = null;
   }
 }
 

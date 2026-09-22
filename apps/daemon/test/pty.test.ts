@@ -51,6 +51,18 @@ describe('TitleScanner', () => {
   it('stops assembling once a title is absurdly long', () => {
     expect(feed(`\x1b]0;${'x'.repeat(400)}\x07`)).toEqual([null]);
   });
+
+  it('ignores OSC 9;4 progress reports instead of naming a session after them', () => {
+    // Regression: this was landing as a session name like "9;4;3;".
+    expect(feed('\x1b]9;4;3;50\x07')).toEqual([null]);
+    expect(feed('\x1b]9;4;0;0\x1b\\')).toEqual([null]);
+  });
+
+  it('still reads a real title arriving right after an ignored OSC 9;4', () => {
+    expect(feed('\x1b]9;4;3;50\x07\x1b]0;fix the retry storm\x07')).toEqual([
+      'fix the retry storm',
+    ]);
+  });
 });
 
 describe('cleanTitle', () => {
