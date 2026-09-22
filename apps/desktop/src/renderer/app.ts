@@ -40,18 +40,35 @@ const ago = (ms: number) => {
   return `${(s / 86400) | 0}d`;
 };
 
+function homePath(full: string): string {
+  return full.replace(/^\/home\/[^/]+/, '~').replace(/^\/Users\/[^/]+/, '~');
+}
+
 /**
- * Shortens a path for the one line it gets in the header: home becomes ~, and a
- * deep path keeps its last two segments, which are the ones that identify it.
- * The full path stays in the tooltip. (CSS ellipsis alone would cut off exactly
- * the informative end, and direction:rtl fixes that by moving the leading slash
- * to the other end of the string, which is a lie.)
+ * Shortens a path for when the header has no room for it: home becomes ~, and
+ * a deep path keeps its last two segments, which are the ones that identify
+ * it. (CSS ellipsis alone would cut off exactly the informative end, and
+ * direction:rtl fixes that by moving the leading slash to the other end of the
+ * string, which is a lie.)
  */
 function shortPath(full: string): string {
-  const home = full.replace(/^\/home\/[^/]+/, '~').replace(/^\/Users\/[^/]+/, '~');
+  const home = homePath(full);
   const parts = home.split('/');
   if (parts.length <= 4) return home;
   return [parts[0], '…', ...parts.slice(-2)].join('/');
+}
+
+/**
+ * Shows the full path if the header is wide enough for it, and only falls
+ * back to shortPath's middle-ellipsis once it actually overflows.
+ */
+function fitFolderPath(el: HTMLElement, cwd: string | null | undefined): void {
+  if (!cwd) {
+    el.textContent = 'choose a folder…';
+    return;
+  }
+  el.textContent = homePath(cwd);
+  if (el.scrollWidth > el.clientWidth) el.textContent = shortPath(cwd);
 }
 
 const COURT_LABEL: Record<string, string> = {
@@ -877,6 +894,8 @@ let mounted: {
 
 const EMPTY_SIG = { head: '', sess: '', side: '', time: '', usage: '' };
 
+let folderObserver: ResizeObserver | null = null;
+
 const trackById = (id: number) =>
   tracks.find((x) => x.id === id) ?? closedTracks.find((x) => x.id === id);
 
@@ -932,7 +951,7 @@ function buildDetail(id: number) {
         const btn = $('folder');
         if (!btn.isConnected || btn.textContent !== 'copied') return;
         const cur = trackById(id);
-        btn.textContent = cur?.cwd ? shortPath(cur.cwd) : 'choose a folder…';
+        fitFolderPath(btn, cur?.cwd);
       }, 900);
       return;
     }
@@ -941,6 +960,12 @@ function buildDetail(id: number) {
     await window.omi.rpc('tracks.update', { id, patch: { cwd: dir } });
     await refresh();
   };
+
+  // The folder gets more or less room as the window or the rail resizes, not
+  // only when the track changes, so the full/short choice has to follow that too.
+  folderObserver?.disconnect();
+  folderObserver = new ResizeObserver(() => fitFolderPath($('folder'), trackById(id)?.cwd));
+  folderObserver.observe($('folder'));
 
   /**
    * Your own terminal, in the folder the session on screen is working in. The
@@ -1108,7 +1133,7 @@ function setFolderLabel(t: Track) {
       ? `${t.cwd} — click to copy`
       : `${t.cwd} — click to change`
     : 'no folder set — click to choose one';
-  folder.textContent = t.cwd ? shortPath(t.cwd) : 'choose a folder…';
+  fitFolderPath(folder, t.cwd);
 }
 
 /**
