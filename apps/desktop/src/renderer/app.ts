@@ -1386,7 +1386,7 @@ function patchSide(t: Track, session: Ref | undefined) {
 
   const refRow = (r: Ref) => `
     <div class="ref">
-      <span class="rk">${esc(r.kind.replace('_', ' '))}</span>
+      <span class="rk">${esc(r.kind === 'slack_message' ? 'slack' : r.kind.replace('_', ' '))}</span>
       <span class="rl">${esc(r.label ?? r.externalId)}</span>
       ${r.state ? `<span class="rs">${esc(r.state)}</span>` : ''}
       ${r.url ? `<a class="go" data-url="${esc(r.url)}" title="open link">↗</a>` : ''}
