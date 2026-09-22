@@ -36,6 +36,8 @@ export class AttentionUi {
   private memo = new Map<string, NotifyMemo>();
   private flying: 'idle' | 'attention' | null = null;
   private menuSig = '';
+  /** Keeps shown notifications from being GC'd before the user can click them. */
+  private live = new Set<Notification>();
 
   constructor(opts: AttentionUiOptions) {
     this.opts = opts;
@@ -122,6 +124,8 @@ export class AttentionUi {
         urgency: urgencyOf(ask),
       });
       n.on('click', () => this.opts.onOpen(ask));
+      n.on('close', () => this.live.delete(n));
+      this.live.add(n);
       n.show();
     }
   }
