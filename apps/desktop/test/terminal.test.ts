@@ -62,28 +62,70 @@ describe('resolveTerminal', () => {
   });
 
   it('honours $TERMINAL as an app name on macOS', () => {
+    const l = resolveTerminal('/p', mac({ env: { TERMINAL: 'Ghostty' } }));
+    expect(l?.args).toEqual(['-a', 'Ghostty', '/p']);
+  });
+
+  it('scripts a new iTerm window instead of `open`, which can land in a tab', () => {
     const l = resolveTerminal('/p', mac({ env: { TERMINAL: 'iTerm' } }));
-    expect(l?.args).toEqual(['-a', 'iTerm', '/p']);
+    expect(l?.file).toBe('osascript');
+    expect(l?.args).toEqual([
+      '-e',
+      'tell application "iTerm"',
+      '-e',
+      'activate',
+      '-e',
+      'create window with default profile',
+      '-e',
+      'tell current session of current window',
+      '-e',
+      'write text "cd " & quoted form of "/p"',
+      '-e',
+      'end tell',
+      '-e',
+      'end tell',
+    ]);
+  });
+
+  it('escapes quotes and backslashes in the folder for the AppleScript', () => {
+    const l = resolveTerminal('/p/"weird"\\dir', mac({ env: { TERMINAL: 'iTerm' } }));
+    expect(l?.args).toContain('write text "cd " & quoted form of "/p/\\"weird\\"\\\\dir"');
   });
 
   it('opens the app the user set for .command files, by bundle id', () => {
     const l = resolveTerminal(
       '/p',
       mac({
-        scriptHandler: () => 'com.googlecode.iterm2',
+        scriptHandler: () => 'org.mozilla.firefox',
         // Installed and earlier in the list; the deliberate choice still wins.
         hasApp: (a) => a === 'Ghostty',
       }),
     );
-    expect(l?.args).toEqual(['-b', 'com.googlecode.iterm2', '/p']);
+    expect(l?.args).toEqual(['-b', 'org.mozilla.firefox', '/p']);
+  });
+
+  it('scripts a new iTerm window when the .command handler is iTerm, by bundle id', () => {
+    const l = resolveTerminal(
+      '/p',
+      mac({ scriptHandler: () => 'com.googlecode.iterm2', hasApp: (a) => a === 'Ghostty' }),
+    );
+    expect(l?.file).toBe('osascript');
   });
 
   it('falls back to whichever known terminal is installed', () => {
     const l = resolveTerminal(
       '/p',
+      mac({ scriptHandler: () => null, hasApp: (a) => a === 'Ghostty' }),
+    );
+    expect(l?.args).toEqual(['-a', 'Ghostty', '/p']);
+  });
+
+  it('scripts a new iTerm window when the fallback scan finds iTerm installed', () => {
+    const l = resolveTerminal(
+      '/p',
       mac({ scriptHandler: () => null, hasApp: (a) => a === 'iTerm' }),
     );
-    expect(l?.args).toEqual(['-a', 'iTerm', '/p']);
+    expect(l?.file).toBe('osascript');
   });
 
   it('lands on Terminal when nothing else is installed', () => {

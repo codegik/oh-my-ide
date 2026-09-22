@@ -35,7 +35,29 @@ const LINUX_TERMINALS = [
  */
 const MAC_TERMINALS = ['iTerm', 'Ghostty', 'WezTerm', 'Warp', 'Hyper'];
 
+const ITERM_BUNDLE_ID = 'com.googlecode.iterm2';
+
 export type TerminalLaunch = { file: string; args: string[]; cwd: string };
+
+function isIterm(nameOrBundleId: string): boolean {
+  const v = nameOrBundleId.trim().toLowerCase();
+  return v === 'iterm' || v === 'iterm2' || v === ITERM_BUNDLE_ID;
+}
+
+function newItermWindow(dir: string): TerminalLaunch {
+  const escaped = dir.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const lines = [
+    'tell application "iTerm"',
+    'activate',
+    'create window with default profile',
+    'tell current session of current window',
+    `write text "cd " & quoted form of "${escaped}"`,
+    'end tell',
+    'end tell',
+  ];
+  const args = lines.flatMap((line) => ['-e', line]);
+  return { file: 'osascript', args, cwd: dir };
+}
 
 export type ResolveEnv = {
   platform: string;
@@ -64,13 +86,14 @@ export function resolveTerminal(dir: string, ctx: ResolveEnv): TerminalLaunch | 
       cwd: dir,
     });
     const named = ctx.env.TERMINAL?.trim();
-    if (named) return mac(['-a', named]);
+    if (named) return isIterm(named) ? newItermWindow(dir) : mac(['-a', named]);
     // Set only when someone changed it, so an answer here is a real choice —
     // and it is the one iTerm, Ghostty and friends ask for when you make them
     // your default terminal.
     const chosen = ctx.scriptHandler?.();
-    if (chosen) return mac(['-b', chosen]);
-    return mac(['-a', MAC_TERMINALS.find((a) => ctx.hasApp?.(a)) ?? 'Terminal']);
+    if (chosen) return isIterm(chosen) ? newItermWindow(dir) : mac(['-b', chosen]);
+    const app = MAC_TERMINALS.find((a) => ctx.hasApp?.(a)) ?? 'Terminal';
+    return isIterm(app) ? newItermWindow(dir) : mac(['-a', app]);
   }
   const named = ctx.env.TERMINAL?.trim();
   const candidates = named ? [named, ...LINUX_TERMINALS] : LINUX_TERMINALS;
