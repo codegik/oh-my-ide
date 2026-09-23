@@ -770,7 +770,8 @@ function wireTabStrip(scroller: HTMLElement, more: HTMLButtonElement, itemSel: s
   // Middle click closes a tab, as in a browser: it does whatever its × does, so
   // a tab without one (a session still holding refs) stays put.
   scroller.onmousedown = (e) => {
-    // Otherwise Linux starts autoscroll or pastes the primary selection.
+    // Otherwise Linux starts an autoscroll. The primary-selection paste that
+    // comes with the same click is cancelled on the mouseup, in boot().
     if (e.button === 1) e.preventDefault();
   };
   scroller.onauxclick = (e) => {
@@ -2866,6 +2867,33 @@ async function boot() {
   );
   window.addEventListener('blur', closeTabMenu);
   window.addEventListener('resize', closeTabMenu);
+  /**
+   * On Linux a middle click pastes the primary selection into whatever holds
+   * the caret. Usually the middle mousedown moves the caret to where the click
+   * landed first, so a click on a tab pastes nowhere — but the tab strips
+   * cancel that mousedown to keep Linux from starting an autoscroll, which
+   * leaves the caret in the focused terminal and turns a middle click on a tab
+   * into typing in the session on screen.
+   *
+   * Chromium decides to paste while handling the mouseup and skips it only when
+   * that event was cancelled; auxclick, where the strips do their closing,
+   * comes after the decision and is too late to stop it. Cancelling the mouseup
+   * does not cost the auxclick, so the tab still closes.
+   *
+   * Kept where a middle click is meant to paste: inside a terminal, where it is
+   * the usual terminal paste xterm aims at the cursor, and on a text field,
+   * where the same click is what puts the caret there.
+   */
+  window.addEventListener(
+    'mouseup',
+    (e) => {
+      if (e.button !== 1) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest('.termhost, input, textarea, [contenteditable]')) return;
+      e.preventDefault();
+    },
+    true,
+  );
   window.addEventListener(
     'keydown',
     (e) => {
