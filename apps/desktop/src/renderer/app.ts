@@ -243,6 +243,7 @@ function termFor(viewId: string) {
     scrollback: 10_000,
     cursorBlink: true,
     theme: { background: '#0b0d12', foreground: '#e6e9f0' },
+    linkHandler: { activate: (_event, uri) => void window.omi.openExternal(uri) },
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
