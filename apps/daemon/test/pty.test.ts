@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanTitle, TitleScanner } from '../src/pty.js';
+import { cleanTitle, stripSuspend, TitleScanner } from '../src/pty.js';
 
 /**
  * The CLI never renames a session, but it does publish a running summary of the
@@ -69,5 +69,34 @@ describe('cleanTitle', () => {
   it('strips status glyphs, squeezes space, and caps the length', () => {
     expect(cleanTitle('✳  why   are payments  timing out')).toBe('why are payments timing out');
     expect(cleanTitle('x'.repeat(200))).toHaveLength(60);
+  });
+});
+
+/**
+ * Ctrl+Z makes the CLI hand the terminal back and wait for a shell to continue
+ * it. There is no shell behind a view here, so the pane would go blank and stay
+ * deaf while the session itself kept running — see the note in pty.ts.
+ */
+describe('stripSuspend', () => {
+  const strip = (s: string) => stripSuspend(Buffer.from(s, 'utf8')).toString('utf8');
+
+  it('drops Ctrl+Z, on its own or mixed into a burst of typing', () => {
+    expect(strip('\x1a')).toBe('');
+    expect(strip('hel\x1alo\x1a')).toBe('hello');
+  });
+
+  it('leaves every other control byte alone, Ctrl+C included', () => {
+    // Ctrl+C, Esc, Enter, Tab, Backspace and a cursor key: all of them mean
+    // something to the CLI, and only the one that wedges it is taken away.
+    const keys = '\x03\x1b\r\t\x7f\x1b[A';
+    expect(strip(keys)).toBe(keys);
+  });
+
+  it('keeps pasted text intact, accents and all', () => {
+    const pasted = '\x1b[200~pensando em arquitetura, não em código\x1b[201~';
+    expect(strip(pasted)).toBe(pasted);
+    expect(stripSuspend(Buffer.from(pasted, 'utf8'))).toHaveLength(
+      Buffer.byteLength(pasted, 'utf8'),
+    );
   });
 });

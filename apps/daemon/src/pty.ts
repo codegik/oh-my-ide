@@ -102,6 +102,33 @@ export function cleanTitle(raw: string): string {
     .slice(0, 60);
 }
 
+/**
+ * Ctrl+Z. The Claude CLI implements suspend itself rather than leaving it to
+ * the kernel — it runs the tty in raw mode, so no SIGTSTP is ever generated —
+ * and what it does on this byte is hand the terminal back: it shows the cursor,
+ * turns mouse reporting and bracketed paste off, restores cooked mode, and then
+ * waits to be continued.
+ *
+ * In a real terminal that works because a shell is sitting behind the CLI: it
+ * reaps the stopped job, prints "[1]+ Stopped", and `fg` brings it back. Behind
+ * this view there is no shell — the pty's only child IS `claude attach` — so
+ * nothing ever continues it. The pane goes blank, keystrokes land in a cooked
+ * tty nobody reads, and the only way back is to attach again from somewhere
+ * else. The session itself is untouched throughout; it is the client that is
+ * lost.
+ *
+ * So the byte is dropped on the way in. Suspend has no meaning in a window that
+ * cannot `fg`, and the key is far too easy to hit for the cost of hitting it.
+ */
+const SUSPEND = 0x1a;
+
+/** Input as the session should see it: everything except the suspend byte. */
+export function stripSuspend(bytes: Buffer): Buffer {
+  if (!bytes.includes(SUSPEND)) return bytes;
+  // Safe byte-wise: UTF-8 never encodes anything else with a byte below 0x80.
+  return Buffer.from(bytes.filter((b) => b !== SUSPEND));
+}
+
 export interface OpenOptions {
   viewId: string;
   file: string;
@@ -204,7 +231,9 @@ class PtyView {
   }
 
   input(bytes: Buffer): void {
-    if (!this.exited) this.proc.write(bytes.toString('utf8'));
+    if (this.exited) return;
+    const typed = stripSuspend(bytes);
+    if (typed.length > 0) this.proc.write(typed.toString('utf8'));
   }
 
   resize(cols: number, rows: number): void {
