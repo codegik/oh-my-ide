@@ -55,6 +55,25 @@ Two deliberate rules worth not "fixing":
 - **A high-weight signal breaks a hard pin**, and writes a timeline event saying
   why. Otherwise a pin could hide a session that is actively blocked on you.
 
+**Court colours** (`:root` in `renderer/index.html`, and the tray icon, which
+reads ON_ME out of `tools/scripts/tray-icons.mjs`):
+
+| court | colour | |
+|---|---|---|
+| `ON_ME` | blue `#4ea1ff` | the turn is back with you |
+| `ON_CLAUDE` | orange `#ff7a59` | the machine is thinking |
+| `ON_THEM` | violet `#c08cff` | |
+| `ON_SYSTEM` | amber `#ffc857` | |
+| `PARKED` | slate `#5b6478` | |
+
+Orange-for-thinking, blue-for-your-turn is the convention the other agent IDEs
+already teach (VS Code, Antigravity), and orange is Claude's own colour — so an
+orange dot reads as "Claude has it" without a legend. These two were the other
+way round until a user pointed that out. The same two hues also appear as plain
+chrome — `--brand` on the primary button, `--accent` on focus rings — and those
+are deliberately **separate tokens**, so restyling a button never silently
+recolours a court.
+
 ---
 
 ## Repo map

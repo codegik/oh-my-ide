@@ -14,7 +14,8 @@
  *
  * Two states, differing in BOTH colour and shape, because colour alone is not a
  * signal everyone can see: idle is a grey mark, attention is the same mark in
- * the ON_ME orange with a filled dot in the corner.
+ * the ON_ME blue with a filled dot in the corner — the same blue the rail flies
+ * on a track that is waiting on you, so the panel and the window agree.
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -25,7 +26,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const OUT = path.join(ROOT, 'apps', 'desktop', 'assets');
 
 /** ON_ME, straight from the renderer's stylesheet, and the muted line colour. */
-const ON_ME = '#ff7a59';
+const ON_ME = '#4ea1ff';
 const IDLE = '#9aa3b8';
 
 /**
