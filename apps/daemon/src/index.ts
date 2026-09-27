@@ -390,11 +390,20 @@ async function startTrackSession(
  * Refuses before anything is spawned, with the reason the probe gave. A button
  * that reports "`tmux` was not found" is worth ten that fail obscurely three
  * calls deeper.
+ *
+ * A cached "unavailable" is never trusted on its own: a probe shells out, and a
+ * version call that timed out once — or ran before the CLI was installed, or
+ * before the PATH was what it is now — would otherwise block every launch of
+ * that agent for the life of the daemon. Asking again costs one subprocess on a
+ * path that was about to fail anyway.
  */
 async function assertAgentUsable(agent: AgentId): Promise<void> {
-  const c = agentCompat.get(agent) ?? (await probeAgents()).find((x) => x.agent === agent);
-  if (c && !c.available) {
-    throw new Error(`${agent} cannot be used here: ${c.notes.join('; ') || 'not installed'}`);
+  const cached = agentCompat.get(agent);
+  if (cached?.available) return;
+  agentsPromise = null; // force the retry rather than re-reading the failure
+  const fresh = (await probeAgents()).find((x) => x.agent === agent);
+  if (fresh && !fresh.available) {
+    throw new Error(`${agent} cannot be used here: ${fresh.notes.join('; ') || 'not installed'}`);
   }
 }
 

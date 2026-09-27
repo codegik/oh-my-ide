@@ -119,8 +119,12 @@ interface Track {
   originUrl: string | null;
   lastActivityAt: number;
   cwd: string | null;
-  /** Which CLI runs this track's sessions: every session in it is the same one. */
-  agent: string;
+  /**
+   * Which CLI runs this track's sessions: every session in it is the same one.
+   * Optional because a daemon older than the agent column answers without it;
+   * read it through agentOfTrack, never directly.
+   */
+  agent?: string;
   archivedAt: number | null;
   refs: Ref[];
 }
@@ -394,6 +398,16 @@ async function applyFocus() {
 }
 
 // ── sessions ────────────────────────────────────────────────────────────────
+
+/**
+ * A track's agent. A track row that carries none is either older than the agent
+ * column or came from a daemon that predates it; both were Claude's, and the
+ * badge must never print `undefined` at the user.
+ */
+const agentOfTrack = (t: { agent?: string | null }): string =>
+  AGENT_CHOICES.includes((t.agent ?? '') as (typeof AGENT_CHOICES)[number])
+    ? (t.agent as string)
+    : 'claude';
 
 /**
  * A session ref's external id is `<agent>:<id>`. An id with no prefix at all was
@@ -1127,7 +1141,7 @@ function buildDetail(id: number) {
  */
 function patchHead(t: Track) {
   const m = mounted as NonNullable<typeof mounted>;
-  const sig = `${t.court}|${t.lifecycle}|${t.cwd}|${workingDir(t)}|${sessionRefsOf(t).length > 0}|${t.agent}`;
+  const sig = `${t.court}|${t.lifecycle}|${t.cwd}|${workingDir(t)}|${sessionRefsOf(t).length > 0}|${agentOfTrack(t)}`;
   if (m.sig.head === sig) return;
   m.sig.head = sig;
 
@@ -1171,17 +1185,18 @@ function patchHead(t: Track) {
  */
 function setAgentBadge(t: Track) {
   const el = $<HTMLButtonElement>('agentbtn');
+  const agent = agentOfTrack(t);
   const fixed = sessionRefsOf(t).length > 0;
   // Nothing to say and nothing to change: a Claude track that already has a
   // session is every track this app has ever had.
-  el.hidden = t.agent === 'claude' && fixed;
+  el.hidden = agent === 'claude' && fixed;
   if (el.hidden) return;
-  el.textContent = t.agent;
-  el.className = `agent ${t.agent}`;
+  el.textContent = agent;
+  el.className = `agent ${agent}`;
   el.disabled = fixed;
   el.title = fixed
-    ? `this track's sessions are run by ${t.agent} — that cannot change while it has any`
-    : `run this track's sessions with ${t.agent} — click to switch`;
+    ? `this track's sessions are run by ${agent} — that cannot change while it has any`
+    : `run this track's sessions with ${agent} — click to switch`;
   el.onclick = () => void switchAgent(t);
 }
 
@@ -1190,7 +1205,7 @@ function setAgentBadge(t: Track) {
  * daemon already sends the list, so that is a change here alone.
  */
 async function switchAgent(t: Track) {
-  const next = t.agent === 'claude' ? 'hermes' : 'claude';
+  const next = agentOfTrack(t) === 'claude' ? 'hermes' : 'claude';
   const usable = agents.find((a) => a.agent === next);
   if (usable && !usable.available) {
     showHint($('agentbtn'), usable.notes[0] ?? `${next} is not available`);
@@ -1416,7 +1431,7 @@ async function startSession(trackId: number) {
   try {
     const r = await window.omi.rpc('tracks.startSession', { id: trackId });
     if (r?.session?.sessionId) {
-      activeSession[trackId] = `${r.session.agent ?? cur.agent}:${r.session.sessionId}`;
+      activeSession[trackId] = `${r.session.agent ?? agentOfTrack(cur)}:${r.session.sessionId}`;
     }
     saveTabs();
     // Still "starting" until the listing has it: until then there is nothing to
@@ -1668,7 +1683,7 @@ function mountPendingStart(t: Track) {
   const where = t.cwd ? esc(shortPath(t.cwd)) : "this track's folder";
   if (failed === undefined) {
     wrap.innerHTML = `<div class="empty" role="status">
-      <span class="spin"></span> starting a new ${esc(t.agent)} session in <b>${where}</b>…
+      <span class="spin"></span> starting a new ${esc(agentOfTrack(t))} session in <b>${where}</b>…
       <div class="muted" id="startclock"></div>
       </div>`;
     tickStartClock();
@@ -1695,7 +1710,7 @@ function mountTerminal(t: Track, session: Ref | undefined) {
   const live = session ? liveSession(session) : undefined;
   // The job's own short id, which is what an attach takes.
   const shortId = live?.kind === 'background' ? (live.shortId as string) : null;
-  const agent = session ? agentOfRef(session) : t.agent;
+  const agent = session ? agentOfRef(session) : agentOfTrack(t);
   const viewId = shortId ? `${agent}:${shortId}` : null;
   // Only a session that is gone from the listing can be missing its transcript.
   const has = session && !live ? transcriptOf(session.externalId) : undefined;
@@ -1789,7 +1804,7 @@ function mountTerminal(t: Track, session: Ref | undefined) {
       // and the dead tab goes, instead of leaving a corpse to click past.
       wrap.innerHTML = `<div class="empty">
         <b>${label}</b> cannot be resumed.<br><br>
-        ${esc(t.agent)} no longer has its transcript, so there is nothing to pick up from.<br>
+        ${esc(agentOfTrack(t))} no longer has its transcript, so there is nothing to pick up from.<br>
         A fresh session in ${t.cwd ? esc(shortPath(t.cwd)) : "this track's folder"} takes its place${
           holds > 0 ? `, keeping its ${refCount}` : ''
         }.
@@ -2221,6 +2236,9 @@ function sessionsHere(w: Wizard): any[] {
  */
 function preferredAgent(): string {
   const last = localStorage.getItem('omi.agent') ?? 'claude';
+  if (!AGENT_CHOICES.includes(last as (typeof AGENT_CHOICES)[number])) return 'claude';
+  // Nothing but Claude can be honoured by a daemon that lists no agents.
+  if (agents.length === 0) return 'claude';
   const usable = agents.find((a) => a.agent === last);
   if (usable && !usable.available) return 'claude';
   return last;
@@ -2261,9 +2279,24 @@ function renderWizard() {
    */
   const agentRow = AGENT_CHOICES.map((id) => {
     const info = agents.find((a) => a.agent === id);
-    const off = info ? !info.available : false;
-    const sub = off ? (info?.notes[0] ?? 'not available') : (info?.cliVersion ?? '');
-    const tip = off ? (info?.notes.join(' · ') ?? '') : `run this track's sessions with ${id}`;
+    /**
+     * No list at all means the daemon predates agents entirely — it would take
+     * the choice and start a Claude session anyway, which is worse than saying
+     * so. The app restarts such a daemon on connect (see daemonSkew); this is
+     * what the sheet shows in the moment before that lands.
+     */
+    const unknown = agents.length === 0 && id !== 'claude';
+    const off = unknown || (info ? !info.available : false);
+    const sub = unknown
+      ? 'daemon out of date — reopen the app'
+      : off
+        ? (info?.notes[0] ?? 'not available')
+        : (info?.cliVersion ?? '');
+    const tip = off
+      ? unknown
+        ? 'this daemon does not know about other agents; it is being replaced with the current build'
+        : (info?.notes.join(' · ') ?? '')
+      : `run this track's sessions with ${id}`;
     return `<button type="button" class="seg ${id === w.agent ? 'on' : ''}" data-agent="${id}"
                    ${off ? 'disabled' : ''} title="${esc(tip)}">
               <span class="segname">${id}</span>
@@ -2475,7 +2508,7 @@ function openAttachSheet(trackId: number) {
   renderModal();
   const t = tracks.find((x) => x.id === trackId);
   const cwd = t?.cwd ?? null;
-  void fetchPast(cwd, t?.agent ?? 'claude').then((rows) => {
+  void fetchPast(cwd, t ? agentOfTrack(t) : 'claude').then((rows) => {
     if (!attachSheet || attachSheet.trackId !== trackId) return;
     attachSheet.past = rows;
     attachSheet.pastLoading = false;
@@ -2505,7 +2538,7 @@ function renderAttachSheet() {
 
   host.innerHTML = `
     <form class="sheet" id="att">
-      <div class="whead">ATTACH A ${esc(t.agent.toUpperCase())} SESSION</div>
+      <div class="whead">ATTACH A ${esc(agentOfTrack(t).toUpperCase())} SESSION</div>
       <div class="wpath">${t.cwd ? esc(t.cwd) : '<span class="muted">this track has no folder — showing everything</span>'}</div>
       <input id="atsearch" class="wsearch" value="${esc(a.query)}" placeholder="search sessions…"
              aria-label="search sessions" autocomplete="off" spellcheck="false" />
@@ -2537,7 +2570,7 @@ function renderAttachSheet() {
     for (const sessionId of attachSheet.picked) {
       await window.omi.rpc('tracks.attachSession', { id: a.trackId, sessionId }).catch(() => {});
     }
-    if (first) activeSession[a.trackId] = `${t.agent}:${first}`;
+    if (first) activeSession[a.trackId] = `${agentOfTrack(t)}:${first}`;
     saveTabs();
     closeModal();
     await refresh();
@@ -2559,7 +2592,7 @@ function patchAttachList() {
       .filter(Boolean),
   );
   const linkedIds = new Set(sessionRefsOf(t).map(sessionIdOf));
-  const mine = sessions.filter((s) => (s.agent ?? 'claude') === t.agent);
+  const mine = sessions.filter((s) => (s.agent ?? 'claude') === agentOfTrack(t));
   const inFolder = mine.filter((s) => !t.cwd || a.all || s.cwd === t.cwd);
   const free = inFolder.filter((s) => !linked.has(s));
   const hiddenByFolder = mine.length - inFolder.length;

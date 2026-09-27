@@ -17,6 +17,7 @@ import {
 import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import { app, BrowserWindow, ipcMain, Notification, shell } from 'electron';
 import { AttentionUi } from './attention.js';
+import { daemonSkew } from './skew.js';
 import { hasMacApp, macScriptHandler, onPath, resolveTerminal } from './terminal.js';
 
 // Hyprland/Wayland: without these Electron renders through XWayland and is blurry
@@ -61,6 +62,16 @@ function guard<A extends unknown[], R>(
     if (!fromApp(e)) throw new Error('ipc from an untrusted frame');
     return fn(e, ...args);
   };
+}
+
+/** The bundle we would spawn, stamped the way the daemon stamps its own. */
+function ourBuildId(): string | null {
+  try {
+    const st = fs.statSync(DAEMON_ENTRY);
+    return `${Math.round(st.mtimeMs)}-${st.size}`;
+  } catch {
+    return null;
+  }
 }
 
 /** Main is a dumb frame proxy: it owns the socket, the renderer owns no Node. */
@@ -165,31 +176,25 @@ class DaemonClient {
   }
 
   /**
-   * A daemon started before the last build is running old code: it will answer
-   * some calls and reject others with `no such method`, which reads like a bug
-   * in whatever the user just clicked. Comparing the bundle it loaded against
-   * the one on disk turns that into a restart nobody has to think about —
-   * Claude sessions live outside the daemon, so they ride it out untouched.
+   * A daemon that is not the one this window should be driving gets replaced by
+   * one that is. `daemonSkew` holds the rule and the reasoning; here it is only
+   * acted on. Restarting is safe by design: no agent's sessions live in the
+   * daemon, so they ride it out untouched.
    */
   private restartIfStale(welcome: Record<string, unknown>): boolean {
     if (this.replacedStaleDaemon) return false;
-    const entry = welcome.entry;
-    const buildId = welcome.buildId;
-    // An older daemon reports neither, and one launched from somewhere else is
-    // not ours to compare against; leave both alone.
-    if (typeof entry !== 'string' || typeof buildId !== 'string') return false;
-    if (path.resolve(entry) !== path.resolve(DAEMON_ENTRY)) return false;
-    let onDisk: string;
-    try {
-      const st = fs.statSync(DAEMON_ENTRY);
-      onDisk = `${Math.round(st.mtimeMs)}-${st.size}`;
-    } catch {
-      return false;
-    }
-    if (onDisk === buildId) return false;
+    const skew = daemonSkew(
+      { entry: welcome.entry, buildId: welcome.buildId },
+      { entry: path.resolve(DAEMON_ENTRY), buildId: ourBuildId() },
+    );
+    if (!skew.stale) return false;
 
     this.replacedStaleDaemon = true;
-    process.stderr.write('[desktop] daemon is running a stale build; restarting it\n');
+    process.stderr.write(
+      skew.reason === 'install'
+        ? `[desktop] the daemon on the socket is another install's (${String(welcome.entry)}); restarting it as ours\n`
+        : '[desktop] daemon is running a stale build; restarting it\n',
+    );
     // Fire and forget: the daemon exits, `close` fires, and the usual reconnect
     // spawns the current build and tells the renderer to re-attach its terminals.
     this.send({ t: 'rpc', id: this.nextId++, method: 'daemon.shutdown' });
