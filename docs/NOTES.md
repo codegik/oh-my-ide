@@ -175,6 +175,16 @@ and still has no electron binary to run. `./start.sh` fetches it on first build;
 code. `./start.sh build` does packages before apps. Tests dodge this entirely by
 aliasing `@omi/*` to source in `vitest.config.ts`.
 
+**A daemon from ANOTHER checkout will happily serve your window.** There is one
+socket per user, and the app used to leave a daemon alone whenever its entry
+path was not the one this build would spawn. Run a dev build from a worktree
+while the main checkout's daemon is still listening and you get this year's UI
+over last week's backend: new RPCs answered with `no such method`, new params
+dropped on the floor, and a track that ignores the agent you picked. The window
+now replaces any daemon that is not the one it would have spawned
+(`apps/desktop/src/skew.ts`) — which is safe precisely because no session lives
+in the daemon.
+
 **tmux's `=name` exact match only works on SESSION targets.** `attach`/`has`/
 `kill-session` take it; `capture-pane`, `send-keys` and `set-option` do not, and
 answer `can't find pane: =omi-h-…`. Our `set-option` calls failed silently that
