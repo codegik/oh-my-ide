@@ -2,18 +2,12 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import type { ClaudeCompat, NormalizedSession } from '@omi/claude-adapter';
-import {
-  ClaudeBgRunner,
-  hasTranscript,
-  isSameSession,
-  pastSessionsFor,
-  probe,
-  sessionUsage,
-  shortIdOf,
-} from '@omi/claude-adapter';
-import { parseRef } from '@omi/core';
+import type { ClaudeCompat } from '@omi/claude-adapter';
+import { ClaudeBgRunner, isSameSession, probe, shortIdOf } from '@omi/claude-adapter';
+import type { AgentCompat, AgentId, NormalizedSession, SessionRunner } from '@omi/core';
+import { AGENT_IDS, agentOf, parseRef, sessionIdOf, sessionKey, toAgentId } from '@omi/core';
 import { Db } from '@omi/db';
+import { HermesRunner } from '@omi/hermes-adapter';
 import {
   encodeControl,
   FRAME_CONTROL,
@@ -54,7 +48,30 @@ const DATA_DIR = path.join(
 );
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 
-const runner = new ClaudeBgRunner();
+/**
+ * One runner per agent. Which one answers is decided by the track — a track's
+ * sessions are all run by its own agent — or, on an id-only path, by the prefix
+ * the session ref carries (`claude:` / `hermes:`).
+ */
+const hermesRunner = new HermesRunner();
+const runners: Record<AgentId, SessionRunner> = {
+  claude: new ClaudeBgRunner(),
+  hermes: hermesRunner,
+};
+const runnerFor = (agent: AgentId): SessionRunner => runners[agent];
+const runnerForRef = (externalId: string): SessionRunner => runners[agentOf(externalId)];
+
+/**
+ * Whether a listed session is the one a ref stored. Claude's own short-id rule
+ * lives in its adapter; every other agent runs a session under the key we gave
+ * it, so the id is the id.
+ */
+function isRefOf(s: NormalizedSession, externalId: string): boolean {
+  if (s.agent !== agentOf(externalId)) return false;
+  const id = sessionIdOf(externalId);
+  return s.agent === 'claude' ? isSameSession(s, id) : s.sessionId === id;
+}
+
 const hub = new PtyHub();
 const db = new Db(path.join(DATA_DIR, 'omid.db'));
 
@@ -92,6 +109,40 @@ function getCompat(): Promise<ClaudeCompat> {
   return compatPromise;
 }
 
+/**
+ * What every agent can do, warmed at boot for the same reason the Claude probe
+ * is: `hello` must never sit on a subprocess. Cached for the life of the daemon
+ * except for a failure, which is retried — an agent installed while the app runs
+ * should not need a restart to appear.
+ */
+const agentCompat = new Map<AgentId, AgentCompat>();
+let agentsPromise: Promise<AgentCompat[]> | null = null;
+
+function probeAgents(): Promise<AgentCompat[]> {
+  agentsPromise ??= Promise.all(
+    AGENT_IDS.map((id) =>
+      runnerFor(id)
+        .probe()
+        .catch(
+          (err): AgentCompat => ({
+            agent: id,
+            cliVersion: 'unknown',
+            tier: 'unsupported',
+            available: false,
+            notes: [`could not probe ${id}: ${err instanceof Error ? err.message : String(err)}`],
+          }),
+        ),
+    ),
+  ).then((list) => {
+    agentCompat.clear();
+    for (const c of list) agentCompat.set(c.agent, c);
+    // Retry a run where something was missing; keep a clean answer.
+    if (list.some((c) => !c.available)) agentsPromise = null;
+    return list;
+  });
+  return agentsPromise;
+}
+
 const clients = new Set<net.Socket>();
 function broadcast(msg: unknown): void {
   const frame = encodeControl(msg);
@@ -114,20 +165,26 @@ function broadcast(msg: unknown): void {
  * an empty listing, as getCompat degrades to its `degraded` tier. Logged only
  * when the message changes: the rail polls every few seconds.
  */
-let lastListError = '';
-async function listSessionsOrNone(): Promise<NormalizedSession[]> {
+const lastListError = new Map<AgentId, string>();
+async function listOne(agent: AgentId): Promise<NormalizedSession[]> {
   try {
-    const sessions = await runner.list();
-    lastListError = '';
+    const sessions = await runnerFor(agent).list();
+    lastListError.delete(agent);
     return sessions;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (msg !== lastListError) {
-      lastListError = msg;
-      process.stderr.write(`[omid] could not list Claude sessions: ${msg}\n`);
+    if (msg !== lastListError.get(agent)) {
+      lastListError.set(agent, msg);
+      process.stderr.write(`[omid] could not list ${agent} sessions: ${msg}\n`);
     }
     return [];
   }
+}
+
+/** Every agent's sessions in one list. One agent failing never hides another's. */
+async function listSessionsOrNone(): Promise<NormalizedSession[]> {
+  const perAgent = await Promise.all(AGENT_IDS.map(listOne));
+  return perAgent.flat();
 }
 
 async function syncSessions(): Promise<NormalizedSession[]> {
@@ -135,10 +192,48 @@ async function syncSessions(): Promise<NormalizedSession[]> {
   const touched = new Set<number>();
   // Walk our refs rather than the listing: a session can be listed under a
   // newer UUID than the one we stored (see isSameSession).
-  for (const ext of new Set(db.listSessionRefs().map((r) => r.externalId))) {
-    const s = sessions.find((x) => isSameSession(x, ext.replace(/^claude:/, '')));
+  for (const ref of db.listSessionRefs()) {
+    // Hand back what we already know, so a daemon restart does not have to
+    // rediscover which hermes conversation a session key belongs to.
+    if (agentOf(ref.externalId) === 'hermes') {
+      hermesRunner.remember(sessionIdOf(ref.externalId), ref.agentSessionId);
+    }
+    const s = sessions.find((x) => isRefOf(x, ref.externalId));
     if (!s) continue;
-    for (const id of db.setRefState('claude_session', ext, s.state)) touched.add(id);
+    for (const id of db.setRefState('claude_session', ref.externalId, s.state)) touched.add(id);
+    /**
+     * An agent that files a conversation under an id of its own gets that id
+     * recorded the first time we see it — hermes writes its session row on the
+     * first message, so this is how a tab opened a minute ago becomes a
+     * conversation that can be resumed, priced and titled.
+     */
+    if (s.agentSessionId && !ref.agentSessionId) {
+      for (const id of db.setRefAgentSessionId(ref.externalId, s.agentSessionId)) touched.add(id);
+    }
+    /**
+     * Some agents name their own sessions. Hermes titles one from its first
+     * message and then RETITLES it once it has read the conversation — the
+     * first title is the prompt verbatim, the second is about the work — so the
+     * label follows the agent's name rather than keeping whichever arrived
+     * first. Claude is excluded: its listed name is the one `-n` was given, and
+     * its running title comes off the pty instead (adoptTitle).
+     *
+     * Only the first adoption writes a timeline event. A retitle is the agent
+     * improving its own wording, not something that happened to the track.
+     */
+    const placeholder = isPlaceholderLabel(ref.label, sessionIdOf(ref.externalId));
+    if (s.name && s.agent !== 'claude' && s.name !== ref.label) {
+      db.setRefLabel(ref.id, s.name);
+      if (placeholder) {
+        db.addEvent({
+          trackId: ref.trackId,
+          source: 'claude',
+          kind: 'session.named',
+          title: `session named "${s.name}"`,
+        });
+      }
+      touched.add(ref.trackId);
+    }
   }
   if (touched.size > 0) broadcast({ t: 'changed', entity: 'track', ids: [...touched] });
   return sessions;
@@ -149,7 +244,17 @@ async function syncSessions(): Promise<NormalizedSession[]> {
  * subject. It says nothing about this session, so it is never worth storing and
  * never worth keeping once a real title turns up.
  */
-const GENERIC_TITLE = /^claude(\s+code)?$/i;
+const GENERIC_TITLE = /^(claude(\s+code)?|hermes(\s+agent)?)$/i;
+
+/**
+ * Whether a session's label is still the stand-in it was born with, and so may
+ * be replaced by a real title. A name the user chose, or one a session already
+ * carried, is theirs and stays.
+ */
+function isPlaceholderLabel(label: string | null, key: string): boolean {
+  if (!label) return true;
+  return label === key || label === shortIdOf(key) || GENERIC_TITLE.test(label);
+}
 
 /**
  * A session starts life named after its own short id, because there is nothing
@@ -160,13 +265,16 @@ const GENERIC_TITLE = /^claude(\s+code)?$/i;
  */
 function adoptTitle(viewId: string, title: string): void {
   if (GENERIC_TITLE.test(title)) return;
-  const shortId = viewId.replace(/^claude:/, '');
+  const agent = agentOf(viewId);
+  const shortId = sessionIdOf(viewId);
   const touched: number[] = [];
   for (const r of db.listSessionRefs()) {
-    if (shortIdOf(r.externalId.replace(/^claude:/, '')) !== shortId) continue;
-    // Replaceable: the id it was born with, or the CLI's generic title.
-    const placeholder = !r.label || r.label === shortId || GENERIC_TITLE.test(r.label);
-    if (!placeholder) continue;
+    if (agentOf(r.externalId) !== agent) continue;
+    const key = sessionIdOf(r.externalId);
+    // Claude's view is keyed by the short id; every other agent's key is the
+    // whole id, so there is nothing to shorten.
+    if ((agent === 'claude' ? shortIdOf(key) : key) !== shortId) continue;
+    if (!isPlaceholderLabel(r.label, key)) continue;
     db.setRefLabel(r.id, title);
     db.addEvent({
       trackId: r.trackId,
@@ -197,22 +305,23 @@ const stopping = new Set<string>();
 async function stopSessions(targets: NormalizedSession[]): Promise<void> {
   const touched = new Set<number>();
   for (const s of targets) {
-    if (s.kind !== 'background' || stopping.has(s.shortId)) continue;
-    stopping.add(s.shortId);
+    const key = sessionKey(s.agent, s.shortId);
+    if (s.kind !== 'background' || stopping.has(key)) continue;
+    stopping.add(key);
     // Ours first, before its process goes: a view closed by us goes quietly,
-    // where one whose `claude attach` died under it would announce an exit.
-    hub.close(`claude:${s.shortId}`);
+    // where one whose attach died under it would announce an exit.
+    hub.close(key);
     try {
-      await runner.stop({ shortId: s.shortId });
+      await runnerFor(s.agent).stop({ shortId: s.shortId });
     } catch (err) {
       process.stderr.write(
-        `[omid] could not stop session ${s.shortId}: ${err instanceof Error ? err.message : String(err)}\n`,
+        `[omid] could not stop ${s.agent} session ${s.shortId}: ${err instanceof Error ? err.message : String(err)}\n`,
       );
     } finally {
-      stopping.delete(s.shortId);
+      stopping.delete(key);
     }
     for (const r of db.listSessionRefs()) {
-      if (isSameSession(s, r.externalId.replace(/^claude:/, ''))) touched.add(r.trackId);
+      if (isRefOf(s, r.externalId)) touched.add(r.trackId);
     }
   }
   if (touched.size > 0) broadcast({ t: 'changed', entity: 'track', ids: [...touched] });
@@ -222,9 +331,7 @@ async function stopSessions(targets: NormalizedSession[]): Promise<void> {
 async function sessionsBehind(externalIds: string[]): Promise<NormalizedSession[]> {
   if (externalIds.length === 0) return [];
   const listed = await listSessionsOrNone();
-  return listed.filter((s) =>
-    externalIds.some((ext) => isSameSession(s, ext.replace(/^claude:/, ''))),
-  );
+  return listed.filter((s) => externalIds.some((ext) => isRefOf(s, ext)));
 }
 
 /**
@@ -254,26 +361,41 @@ async function startTrackSession(
 ) {
   const cwd = String(p.cwd ?? track.cwd ?? '').trim();
   if (!cwd) throw new Error('this track has no folder; pass one');
+  await assertAgentUsable(track.agent);
   // No prompt: the session opens idle and waits for the user to type into it,
   // which is what a new terminal should do. Nothing is spent up front, and the
   // first message is what ends up naming it (see adoptTitle).
   const prompt = String(p.prompt ?? '').trim();
-  const started = await runner.start({
+  const started = await runnerFor(track.agent).start({
     cwd,
     ...(prompt ? { prompt } : {}),
     ...(p.name ? { name: String(p.name) } : {}),
   });
+  const ext = sessionKey(track.agent, started.sessionId);
   db.addRef({
     trackId: track.id,
     kind: 'claude_session',
-    externalId: `claude:${started.sessionId}`,
+    externalId: ext,
     label: started.name ?? started.shortId,
     state: 'STARTING',
     role: 'implementation',
     linkRule: 'started-here',
+    agentSessionId: started.agentSessionId ?? null,
   });
-  db.adoptOrphanRefs(track.id, `claude:${started.sessionId}`);
+  db.adoptOrphanRefs(track.id, ext);
   return started;
+}
+
+/**
+ * Refuses before anything is spawned, with the reason the probe gave. A button
+ * that reports "`tmux` was not found" is worth ten that fail obscurely three
+ * calls deeper.
+ */
+async function assertAgentUsable(agent: AgentId): Promise<void> {
+  const c = agentCompat.get(agent) ?? (await probeAgents()).find((x) => x.agent === agent);
+  if (c && !c.available) {
+    throw new Error(`${agent} cannot be used here: ${c.notes.join('; ') || 'not installed'}`);
+  }
 }
 
 type Handler = (params: any, sock: net.Socket) => Promise<unknown>;
@@ -286,6 +408,13 @@ const methods: Record<string, Handler> = {
   },
   'claude.compat': async () => getCompat(),
 
+  /**
+   * Which agents this machine can actually run, and what is missing when it
+   * cannot. The wizard shows every agent either way — an option that silently
+   * disappears is indistinguishable from a bug — so this has to say why.
+   */
+  'agents.list': async () => probeAgents(),
+
   'sessions.list': async () => (await syncSessions()).sort((a, b) => b.startedAt - a.startedAt),
 
   /**
@@ -297,9 +426,11 @@ const methods: Record<string, Handler> = {
   'sessions.past': async (p) => {
     const cwd = String(p.cwd ?? '').trim();
     if (!cwd) throw new Error('a folder is required to look up past sessions');
-    const liveHere = (await runner.list()).filter((s) => s.cwd === cwd);
-    return pastSessionsFor(cwd)
-      .filter((h) => !liveHere.some((s) => isSameSession(s, h.sessionId)))
+    const agent = toAgentId(p.agent);
+    const liveHere = (await listOne(agent)).filter((s) => s.cwd === cwd);
+    return runnerFor(agent)
+      .past(cwd)
+      .filter((h) => !liveHere.some((s) => isRefOf(s, sessionKey(agent, h.sessionId))))
       .slice(0, 20);
   },
 
@@ -310,9 +441,23 @@ const methods: Record<string, Handler> = {
    * while a session works without re-reading megabytes.
    */
   'sessions.usage': async (p) => {
-    const ids = (Array.isArray(p.ids) ? p.ids : []).map(String).filter(Boolean).slice(0, 4);
+    const agent = toAgentId(p.agent);
+    const ids: string[] = (Array.isArray(p.ids) ? p.ids : [])
+      .map(String)
+      .filter(Boolean)
+      .slice(0, 4);
     if (ids.length === 0) return null;
-    return sessionUsage(ids, p.cwd ? String(p.cwd) : undefined);
+    // Whatever the agent files this conversation under counts as one of its
+    // ids: for hermes that is where every number lives.
+    const own = db
+      .listSessionRefs()
+      .filter((r) => ids.some((id) => r.externalId === sessionKey(agent, id)))
+      .map((r) => r.agentSessionId)
+      .filter((v): v is string => !!v);
+    return runnerFor(agent).usage(
+      [...new Set([...ids, ...own])].slice(0, 6),
+      p.cwd ? String(p.cwd) : undefined,
+    );
   },
 
   /** Starts a background session in a folder, idle unless a prompt is given. */
@@ -325,7 +470,9 @@ const methods: Record<string, Handler> = {
     // exactOptionalPropertyTypes: an absent field and a field set to `undefined`
     // are not the same thing to the runner's arg type.
     const prompt = String(p.prompt ?? '').trim();
-    return runner.start({
+    const agent = toAgentId(p.agent);
+    await assertAgentUsable(agent);
+    return runnerFor(agent).start({
       cwd,
       ...(prompt ? { prompt } : {}),
       ...(p.name ? { name: String(p.name) } : {}),
@@ -365,6 +512,7 @@ const methods: Record<string, Handler> = {
       question: p.question ?? null,
       cwd: p.cwd ?? null,
       gitBranch: p.gitBranch ?? null,
+      agent: toAgentId(p.agent),
     });
     broadcast({ t: 'changed', entity: 'track', ids: [t.id] });
     return t;
@@ -412,7 +560,9 @@ const methods: Record<string, Handler> = {
     const track = db.getTrack(Number(p.id));
     if (!track) throw new Error('no such track');
 
-    const live = await runner.list();
+    const agent = track.agent;
+    await assertAgentUsable(agent);
+    const live = await listOne(agent);
     const found = live.find((x) => x.sessionId === p.sessionId || x.shortId === p.sessionId);
 
     let sessionId: string;
@@ -420,38 +570,49 @@ const methods: Record<string, Handler> = {
     let cwd: string | null;
     let name: string | null;
     let state: string | null;
+    let agentSessionId: string | null = null;
     if (found) {
       ({ sessionId, shortId, cwd, name, state } = found);
+      agentSessionId = found.agentSessionId ?? null;
     } else {
-      // Not currently running. Only resume it if a transcript for this
-      // track's own folder actually claims that id — a cheap, local,
-      // read-only check before any id reaches `claude --bg --resume`.
+      // Not currently running. Only resume it if the agent's own history for
+      // this track's folder actually claims that id — a cheap, local,
+      // read-only check before any id reaches a `--resume`.
       const cwdForResume = track.cwd ?? undefined;
       const known =
-        cwdForResume && pastSessionsFor(cwdForResume).some((h) => h.sessionId === p.sessionId);
+        cwdForResume &&
+        runnerFor(agent)
+          .past(cwdForResume)
+          .some((h) => h.sessionId === p.sessionId);
       if (!known) throw new Error('no such session');
-      const started = await runner.resume({ sessionId: String(p.sessionId), cwd: cwdForResume });
+      const started = await runnerFor(agent).resume({
+        sessionId: String(p.sessionId),
+        cwd: cwdForResume,
+      });
       sessionId = started.sessionId;
       shortId = started.shortId;
       cwd = started.cwd;
       name = started.name;
       state = 'STARTING';
+      agentSessionId = started.agentSessionId ?? null;
     }
 
     // A track with no folder of its own takes the one the session is already
     // running in — the user picked the session, so they picked the folder with
     // it, and asking them again would only offer a chance to get it wrong.
     if (!track.cwd && cwd) db.updateTrack(track.id, { cwd });
+    const ext = sessionKey(agent, sessionId);
     db.addRef({
       trackId: Number(p.id),
       kind: 'claude_session',
-      externalId: `claude:${sessionId}`,
+      externalId: ext,
       label: name ?? shortId,
       state,
       role: 'implementation',
       linkRule: 'manual',
+      agentSessionId,
     });
-    db.adoptOrphanRefs(Number(p.id), `claude:${sessionId}`);
+    db.adoptOrphanRefs(Number(p.id), ext);
     broadcast({ t: 'changed', entity: 'track', ids: [Number(p.id)] });
     return db.getTrack(Number(p.id));
   },
@@ -466,7 +627,7 @@ const methods: Record<string, Handler> = {
     const started = await startTrackSession(track, p);
     // Starting over from a session that is gone: bring its refs along.
     if (typeof p.carryFrom === 'string' && p.carryFrom) {
-      db.moveSessionRefs(track.id, p.carryFrom, `claude:${started.sessionId}`);
+      db.moveSessionRefs(track.id, p.carryFrom, sessionKey(track.agent, started.sessionId));
     }
     broadcast({ t: 'changed', entity: 'track', ids: [track.id] });
     return { track: db.getTrack(track.id), session: started };
@@ -477,8 +638,11 @@ const methods: Record<string, Handler> = {
    * session is put on screen, never from the poll: it lists every project
    * folder Claude has.
    */
-  'sessions.hasTranscript': async (p) =>
-    hasTranscript(String(p.session ?? '').replace(/^claude:/, '')),
+  'sessions.hasTranscript': async (p) => {
+    const ext = String(p.session ?? '');
+    const ref = db.listSessionRefs().find((r) => r.externalId === ext);
+    return runnerForRef(ext).canResume(sessionIdOf(ext), ref?.agentSessionId ?? null);
+  },
 
   /**
    * For a session whose transcript is gone: a fresh one takes its place in the
@@ -491,10 +655,10 @@ const methods: Record<string, Handler> = {
     const ext = String(p.session ?? '');
     const old = track.refs.find((r) => r.kind === 'claude_session' && r.externalId === ext);
     if (!old) throw new Error('that session is not part of this track');
-    const live = (await runner.list()).find((s) => isSameSession(s, ext.replace(/^claude:/, '')));
+    const live = (await listOne(agentOf(ext))).find((s) => isRefOf(s, ext));
     if (live) throw new Error('that session is still running; open it instead');
     const started = await startTrackSession(track, p);
-    const now = `claude:${started.sessionId}`;
+    const now = sessionKey(track.agent, started.sessionId);
     db.replaceSession(track.id, ext, now);
     db.addEvent({
       trackId: track.id,
@@ -517,21 +681,28 @@ const methods: Record<string, Handler> = {
     const ext = String(p.session ?? '');
     const ref = track.refs.find((r) => r.kind === 'claude_session' && r.externalId === ext);
     if (!ref) throw new Error('that session is not part of this track');
-    const sessionId = ext.replace(/^claude:/, '');
+    const agent = agentOf(ext);
+    const sessionId = sessionIdOf(ext);
+    await assertAgentUsable(agent);
     // It may never have stopped — only looked that way to a caller matching on
     // the UUID. Resuming it again would start a second, empty session.
-    const live = (await runner.list()).find((s) => isSameSession(s, sessionId));
+    const live = (await listOne(agent)).find((s) => isRefOf(s, ext));
     if (live) {
       db.setRefState('claude_session', ext, live.state);
       broadcast({ t: 'changed', entity: 'track', ids: [track.id] });
       return { track: db.getTrack(track.id), session: { ...live, sessionId } };
     }
-    const started = await runner.resume({ sessionId, ...(track.cwd ? { cwd: track.cwd } : {}) });
+    const started = await runnerFor(agent).resume({
+      sessionId,
+      ...(track.cwd ? { cwd: track.cwd } : {}),
+      agentSessionId: ref.agentSessionId,
+    });
     // The CLI can continue the conversation under a new id; follow it, or the
     // tab keeps pointing at the one that is gone.
-    const now = `claude:${started.sessionId}`;
+    const now = sessionKey(agent, started.sessionId);
     if (now !== ext) db.repointSession(track.id, ext, now);
     db.setRefState('claude_session', now, 'STARTING');
+    if (started.agentSessionId) db.setRefAgentSessionId(now, started.agentSessionId);
     broadcast({ t: 'changed', entity: 'track', ids: [track.id] });
     return { track: db.getTrack(track.id), session: started };
   },
@@ -579,14 +750,16 @@ const methods: Record<string, Handler> = {
 
   // ── pty ───────────────────────────────────────────────────────────────────
   /**
-   * Opens a view onto an EXISTING Claude session via `claude attach`. Attach is
-   * non-exclusive, so the user can also attach from their own terminal at the
-   * same time, and closing this view never stops the session.
+   * Opens a view onto an EXISTING session — `claude attach` for Claude, an
+   * attach to its detached tmux session for hermes. Both are non-exclusive, so
+   * the user can attach from their own terminal at the same time, and closing
+   * this view never stops the session.
    */
   'pty.open': async (p, sock) => {
     const shortId = String(p.shortId);
-    const viewId = `claude:${shortId}`;
-    const cmd = runner.attachCommand({ shortId });
+    const agent = toAgentId(p.agent);
+    const viewId = sessionKey(agent, shortId);
+    const cmd = runnerFor(agent).attachCommand({ shortId });
     const view = hub.open({
       viewId,
       file: cmd.file,
@@ -642,6 +815,8 @@ function handleConnection(sock: net.Socket): void {
 async function dispatch(sock: net.Socket, msg: Record<string, unknown>): Promise<void> {
   if (msg.t === 'hello') {
     const c = await getCompat();
+    // Already warmed at boot, so this resolves without shelling out.
+    const agents = await probeAgents();
     sock.write(
       encodeControl({
         t: 'welcome',
@@ -652,6 +827,7 @@ async function dispatch(sock: net.Socket, msg: Record<string, unknown>): Promise
         pid: process.pid,
         startedAt: STARTED_AT,
         claude: { cliVersion: c.cliVersion, tier: c.tier, notes: c.notes },
+        agents,
       }),
     );
     return;
@@ -705,6 +881,15 @@ async function isDaemonAlive(sock: string): Promise<boolean> {
 
 async function main(): Promise<void> {
   void getCompat(); // warm it: `hello` must never wait on a subprocess
+  void probeAgents(); // same, for the wizard's agent row
+  // Tell the hermes runner which conversation each of its session keys belongs
+  // to before anything asks: a restart must not lose that, or a resume would
+  // start an empty session next to the real one.
+  for (const r of db.listSessionRefs()) {
+    if (agentOf(r.externalId) === 'hermes') {
+      hermesRunner.remember(sessionIdOf(r.externalId), r.agentSessionId);
+    }
+  }
 
   const dir = runtimeDir();
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });

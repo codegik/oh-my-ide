@@ -97,6 +97,7 @@ export function normalizeRow(row: AgentRow): NormalizedSession {
   const state: SessionState = raw ? (table[raw.toLowerCase()] ?? 'UNKNOWN') : 'UNKNOWN';
 
   return {
+    agent: 'claude',
     sessionId: row.sessionId,
     shortId: row.id ?? shortIdOf(row.sessionId),
     kind,

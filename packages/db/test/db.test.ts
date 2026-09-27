@@ -541,4 +541,88 @@ describe('Db', () => {
     expect(db.getTrack(t.id)?.cwd).toBe('/srv/one');
     db.close();
   });
+
+  // ── agents ────────────────────────────────────────────────────────────────
+
+  it('a track runs on claude unless it says otherwise', () => {
+    const db = fresh();
+    expect(db.createTrack({ title: 'x' }).agent).toBe('claude');
+    expect(db.createTrack({ title: 'y', agent: 'hermes' }).agent).toBe('hermes');
+    db.close();
+  });
+
+  it('a track created before there were agents is claude’s', () => {
+    // The whole point of the default on migration 0005: every track that already
+    // existed was run by the only agent there was.
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'omi-mig-')), 'omid.db');
+    const raw = new Database(file);
+    raw.exec(MIGRATION_0001);
+    raw.pragma('user_version = 1');
+    const now = Date.now();
+    raw
+      .prepare(
+        `INSERT INTO track (id, public_id, title, last_activity_at, created_at, updated_at)
+       VALUES (1, 'p1', 'old work', ?, ?, ?)`,
+      )
+      .run(now, now, now);
+    raw
+      .prepare(
+        `INSERT INTO track_ref (id, track_id, kind, external_id, created_at, updated_at)
+       VALUES (7, 1, 'claude_session', 'claude:abc', ?, ?)`,
+      )
+      .run(now, now);
+    raw.close();
+
+    const db = new Db(file);
+    expect(db.getTrack(1)?.agent).toBe('claude');
+    expect(db.getTrack(1)?.refs[0]?.agentSessionId).toBeNull();
+    db.close();
+  });
+
+  it('refuses to hand a track’s running sessions to another agent', () => {
+    // A session is run by the CLI that started it, so the choice is open until
+    // the track has one — the same rule as its folder, for the same reason.
+    const db = fresh();
+    const t = db.createTrack({ title: 'x', agent: 'hermes' });
+    db.updateTrack(t.id, { agent: 'claude' });
+    expect(db.getTrack(t.id)?.agent).toBe('claude');
+
+    db.addRef({ trackId: t.id, kind: 'claude_session', externalId: 'claude:abc', state: 'IDLE' });
+    expect(() => db.updateTrack(t.id, { agent: 'hermes' })).toThrow(/agent cannot change/);
+    expect(db.getTrack(t.id)?.agent).toBe('claude');
+    // Setting it to what it already is is not a change.
+    expect(() => db.updateTrack(t.id, { agent: 'claude' })).not.toThrow();
+    db.close();
+  });
+
+  it('records the id an agent gives a session, once', () => {
+    const db = fresh();
+    const t = db.createTrack({ title: 'x', agent: 'hermes' });
+    db.addRef({ trackId: t.id, kind: 'claude_session', externalId: 'hermes:key1', state: 'IDLE' });
+    expect(db.listSessionRefs()[0]?.agentSessionId).toBeNull();
+
+    expect(db.setRefAgentSessionId('hermes:key1', '20260927_184952_29391d')).toEqual([t.id]);
+    expect(db.listSessionRefs()[0]?.agentSessionId).toBe('20260927_184952_29391d');
+
+    // A second answer would be about a different conversation.
+    expect(db.setRefAgentSessionId('hermes:key1', 'something_else')).toEqual([]);
+    expect(db.listSessionRefs()[0]?.agentSessionId).toBe('20260927_184952_29391d');
+    db.close();
+  });
+
+  it('keeps a discovered id when the session ref is written again', () => {
+    // addRef doubles as an upsert on every poll that re-links a session; the id
+    // it does not know must not erase the one we found.
+    const db = fresh();
+    const t = db.createTrack({ title: 'x', agent: 'hermes' });
+    db.addRef({
+      trackId: t.id,
+      kind: 'claude_session',
+      externalId: 'hermes:key1',
+      agentSessionId: '20260927_184952_29391d',
+    });
+    db.addRef({ trackId: t.id, kind: 'claude_session', externalId: 'hermes:key1', state: 'IDLE' });
+    expect(db.listSessionRefs()[0]?.agentSessionId).toBe('20260927_184952_29391d');
+    db.close();
+  });
 });

@@ -89,6 +89,14 @@ doctor() {
   else
     printf '  %-8s MISSING — run: ./start.sh build\n' electron; ok=1
   fi
+  # Optional: a second agent. Missing either of these is not a failure — it
+  # only means hermes is offered as unavailable, with this as the reason.
+  for c in hermes tmux; do
+    # tmux has no --version, only -V.
+    [ "$c" = tmux ] && vflag=-V || vflag=--version
+    if have "$c"; then printf '  %-8s %s\n' "$c" "$($c $vflag 2>&1 | head -1)"
+    else printf '  %-8s not installed (optional — needed to run tracks on hermes)\n' "$c"; fi
+  done
   printf '  %-8s %s\n' socket "$(daemon_alive && echo "listening at $SOCKET" || echo 'not running')"
   return $ok
 }
@@ -106,7 +114,8 @@ build() {
   [ -d node_modules ] || pnpm install
   ensure_electron
   # Order matters: apps bundle these, so a stale dist silently ships old code.
-  pnpm --filter @omi/protocol --filter @omi/core --filter @omi/claude-adapter --filter @omi/db build
+  pnpm --filter @omi/protocol --filter @omi/core --filter @omi/claude-adapter \
+    --filter @omi/hermes-adapter --filter @omi/db build
   pnpm --filter @omi/daemon --filter @omi/desktop build
 }
 

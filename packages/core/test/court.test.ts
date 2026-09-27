@@ -13,6 +13,7 @@ const ref = (over: Partial<TrackRef> = {}): TrackRef => ({
   state: null,
   isBlocking: true,
   sessionId: '',
+  agentSessionId: null,
   ...over,
 });
 

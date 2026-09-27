@@ -1,5 +1,5 @@
 {
-  "name": "@omi/claude-adapter",
+  "name": "@omi/hermes-adapter",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -16,6 +16,9 @@
   },
   "dependencies": {
     "@omi/core": "workspace:*",
-    "zod": "^4.1.13"
+    "better-sqlite3": "^13.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13"
   }
 }

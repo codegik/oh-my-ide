@@ -80,20 +80,24 @@ Electron  ──unix socket──▶  omid daemon  ──documented CLI──▶
 - **The daemon (`omid`)** owns the socket, the SQLite database and the pollers, but it does
   **not** own the sessions. You can restart it at any time.
 - **Claude Code's own background supervisor** owns the sessions. The cockpit attaches to
-  them and doesn't hold them hostage.
+  them and doesn't hold them hostage. Hermes has no supervisor of its own, so its sessions
+  live in a detached **tmux** session instead — same deal, different owner.
 
-So `claude attach <id>` in a plain terminal works **at the same time** as the cockpit. If
-you stop using oh-my-ide tomorrow, every session is still there in `claude agents`.
-Nothing is locked in.
+So `claude attach <id>` (or `tmux attach -t omi-h-…`) in a plain terminal works **at the
+same time** as the cockpit. If you stop using oh-my-ide tomorrow, every session is still
+there in `claude agents` / `hermes sessions list`. Nothing is locked in.
 
 ## What else is in it
 
 - 🏠 **Local-first.** No server, no account, no telemetry, no sync. One SQLite file on your disk.
 - 🔌 **Works offline.** Ref parsing is plain regex, so it needs no API tokens and no OAuth.
-- ⌨️ **Terminal-native.** It runs the real Claude Code TUI, not a chat window pretending to be one.
+- ⌨️ **Terminal-native.** It runs the real agent TUI, not a chat window pretending to be one.
+- 🤖 **Claude or Hermes, per track.** Pick the agent when you open a track; every session in it
+  runs on that one. Tracks on different agents sit side by side in the same rail.
 - 🗂️ **Tabs that survive restarts.** Reopen the app and your open tracks are where you left them.
-- 🧱 **Contained coupling.** One package, `packages/claude-adapter`, is allowed to know that
-  `~/.claude` exists. It checks the Claude Code version and degrades gracefully instead of breaking.
+- 🧱 **Contained coupling.** One package per agent — `packages/claude-adapter`,
+  `packages/hermes-adapter` — is allowed to know that `~/.claude` or `~/.hermes` exists. Each
+  checks its CLI's version and degrades gracefully instead of breaking.
 - 🚫 **No Sessions screen, on purpose.** Claude Code already has `claude agents`. In oh-my-ide
   a session belongs to a track; it isn't a place you go to.
 
@@ -125,7 +129,9 @@ sudo pacman -Sy oh-my-ide-bin
 It shows up in your app launcher, and new versions arrive with your usual `pacman -Syu`.
 It bundles its own Electron, so you don't need Node or pnpm. You do need **Claude Code 2.1+**
 (`claude`). Wherever you installed it (npm, nvm, mise or the native installer), the app finds
-it through your login shell's `PATH`.
+it through your login shell's `PATH`. **Hermes Agent** is optional: install `hermes` and
+`tmux` and it appears as a second choice in the new-track sheet — without them it is shown
+disabled, with the reason.
 
 After an upgrade, the next launch swaps in the new daemon. Your Claude sessions are not
 touched.

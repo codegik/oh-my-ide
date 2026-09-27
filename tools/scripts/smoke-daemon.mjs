@@ -23,6 +23,13 @@ const { FRAME_CONTROL, FrameDecoder, PROTOCOL_VERSION, encodeControl, socketPath
 const sock = socketPath();
 const timeoutMs = Number(process.env.OMI_SMOKE_TIMEOUT_MS ?? 15_000);
 const withClaude = process.env.OMI_SMOKE_CLAUDE === '1';
+/**
+ * Off by default: this one STARTS a real hermes session, which is the only way
+ * to prove the tmux substrate end to end. It spends nothing — an idle TUI makes
+ * no API call — but it does put a tmux session on the user's machine for a few
+ * seconds, so it is opt-in rather than part of every `./test.sh`.
+ */
+const withHermes = process.env.OMI_SMOKE_HERMES === '1';
 
 const s = net.connect(sock);
 const decoder = new FrameDecoder();
@@ -136,6 +143,85 @@ if (withClaude) {
   });
 } else {
   console.log('  skip  claude.compat, sessions.list (no claude CLI)');
+}
+
+await check('agents.list names every agent and whether it can run here', async () => {
+  const agents = await rpc('agents.list');
+  assert(Array.isArray(agents), 'not a list');
+  const ids = agents.map((a) => a.agent).sort();
+  assert(ids.join(',') === 'claude,hermes', `agents: ${ids.join(',')}`);
+  for (const a of agents) {
+    assert(typeof a.available === 'boolean', `${a.agent} has no availability`);
+    // An unavailable agent MUST say why: the wizard shows the reason under a
+    // disabled option, and an empty one reads as a bug in the app.
+    assert(a.available || a.notes.length > 0, `${a.agent} is unavailable with no reason given`);
+  }
+  return agents
+    .map((a) => `${a.agent} ${a.cliVersion}${a.available ? '' : ' (unavailable)'}`)
+    .join(', ');
+});
+
+if (withHermes) {
+  const cwd = process.env.OMI_SMOKE_CWD ?? ROOT;
+  let track;
+  let started;
+
+  await check('hermes: a track can be created on it', async () => {
+    const agents = await rpc('agents.list');
+    const h = agents.find((a) => a.agent === 'hermes');
+    assert(h?.available, `hermes is not available: ${h?.notes.join('; ')}`);
+    track = await rpc('tracks.create', { title: 'smoke hermes', cwd, agent: 'hermes' });
+    assert(track.agent === 'hermes', `agent ${track.agent}`);
+    return `track ${track.id}`;
+  });
+
+  await check('hermes: a session starts, under a key of ours', async () => {
+    const r = await rpc('tracks.startSession', { id: track.id });
+    started = r.session;
+    assert(started.agent === 'hermes', `agent ${started.agent}`);
+    assert(/^[0-9a-f]{12}$/.test(started.sessionId), `key ${started.sessionId}`);
+    const ref = r.track.refs.find((x) => x.externalId === `hermes:${started.sessionId}`);
+    assert(ref, 'the session was not linked to its track');
+    return started.sessionId;
+  });
+
+  await check('hermes: the session is listed, attachable, in the right folder', async () => {
+    let found;
+    for (let i = 0; i < 40 && !found; i++) {
+      const list = await rpc('sessions.list');
+      found = list.find((x) => x.agent === 'hermes' && x.sessionId === started.sessionId);
+      if (!found) await new Promise((r) => setTimeout(r, 250));
+    }
+    assert(found, 'the session never appeared in the listing');
+    assert(found.kind === 'background', `kind ${found.kind}`);
+    assert(found.cwd === cwd, `cwd ${found.cwd}`);
+    return `${found.state} · ${found.confidence}`;
+  });
+
+  await check('hermes: a pty view opens onto it', async () => {
+    const info = await rpc('pty.open', {
+      shortId: started.sessionId,
+      agent: 'hermes',
+      cwd,
+      cols: 100,
+      rows: 30,
+    });
+    assert(info.viewId === `hermes:${started.sessionId}`, `viewId ${info.viewId}`);
+    return info.viewId;
+  });
+
+  await check('hermes: finishing the track stops the session', async () => {
+    await rpc('tracks.update', { id: track.id, patch: { lifecycle: 'done' } });
+    let gone = false;
+    for (let i = 0; i < 40 && !gone; i++) {
+      const list = await rpc('sessions.list');
+      gone = !list.some((x) => x.agent === 'hermes' && x.sessionId === started.sessionId);
+      if (!gone) await new Promise((r) => setTimeout(r, 250));
+    }
+    assert(gone, 'the session is still running after its track was finished');
+  });
+} else {
+  console.log('  skip  hermes session lifecycle (set OMI_SMOKE_HERMES=1)');
 }
 
 s.destroy();

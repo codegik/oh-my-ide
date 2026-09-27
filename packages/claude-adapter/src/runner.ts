@@ -1,6 +1,17 @@
+import type {
+  AgentCompat,
+  AgentId,
+  NormalizedSession,
+  PastSession,
+  SessionRunner,
+  SessionUsage,
+  StartedSession,
+} from '@omi/core';
 import { dropStaleInteractiveSessions, parseAgentList, shortIdOf } from './agents.js';
+import { probe as probeClaude } from './capabilities.js';
 import { runClaude } from './cli.js';
-import type { NormalizedSession, SessionRunner, StartedSession } from './types.js';
+import { hasTranscript, pastSessionsFor } from './history.js';
+import { sessionUsage } from './usage.js';
 
 /**
  * `claude --bg` prints, on success:
@@ -23,6 +34,8 @@ export function parseBackgroundedId(stdout: string): string | null {
  * detach (even SIGKILL of the attach client).
  */
 export class ClaudeBgRunner implements SessionRunner {
+  readonly agent: AgentId = 'claude';
+
   async start(o: {
     cwd: string;
     /**
@@ -51,6 +64,7 @@ export class ClaudeBgRunner implements SessionRunner {
     const sessionId = (await this.list()).find((s) => s.shortId === shortId)?.sessionId ?? null;
 
     return {
+      agent: this.agent,
       shortId,
       sessionId: sessionId ?? shortId,
       name: o.name ?? null,
@@ -69,6 +83,7 @@ export class ClaudeBgRunner implements SessionRunner {
     const shortId = parseBackgroundedId(stdout) ?? shortIdOf(o.sessionId);
     const found = (await this.list()).find((s) => s.shortId === shortId);
     return {
+      agent: this.agent,
       shortId,
       sessionId: found?.sessionId ?? o.sessionId,
       name: found?.name ?? null,
@@ -91,5 +106,37 @@ export class ClaudeBgRunner implements SessionRunner {
 
   async logs(s: { shortId: string }): Promise<string> {
     return runClaude(['logs', s.shortId], { timeoutMs: 20_000 });
+  }
+
+  past(cwd: string): PastSession[] {
+    return pastSessionsFor(cwd).map((s) => ({
+      agent: this.agent,
+      sessionId: s.sessionId,
+      cwd: s.cwd,
+      gitBranch: s.gitBranch,
+      preview: s.preview,
+      lastActivityAt: s.lastActivityAt,
+    }));
+  }
+
+  canResume(sessionId: string): boolean {
+    return hasTranscript(sessionId);
+  }
+
+  usage(sessionIds: string[], cwdHint?: string): SessionUsage | null {
+    return sessionUsage(sessionIds, cwdHint);
+  }
+
+  async probe(): Promise<AgentCompat> {
+    const c = await probeClaude();
+    return {
+      agent: this.agent,
+      cliVersion: c.cliVersion,
+      tier: c.tier,
+      // The CLI answered at all, so it is installed; a degraded tier is still
+      // usable and says why in its notes.
+      available: c.cliVersion !== 'unknown',
+      notes: c.notes,
+    };
   }
 }

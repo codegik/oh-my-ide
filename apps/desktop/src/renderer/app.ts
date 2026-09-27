@@ -73,7 +73,7 @@ function fitFolderPath(el: HTMLElement, cwd: string | null | undefined): void {
 
 const COURT_LABEL: Record<string, string> = {
   ON_ME: 'ON ME',
-  ON_CLAUDE: 'ON CLAUDE',
+  ON_CLAUDE: 'THINKING',
   ON_SYSTEM: 'ON SYSTEM',
   ON_THEM: 'ON THEM',
   PARKED: 'PARKED',
@@ -102,6 +102,8 @@ interface Ref {
   label: string | null;
   state: string | null;
   sessionId: string;
+  /** For a session ref: the id its own agent files the conversation under. */
+  agentSessionId: string | null;
 }
 
 interface Track {
@@ -117,6 +119,8 @@ interface Track {
   originUrl: string | null;
   lastActivityAt: number;
   cwd: string | null;
+  /** Which CLI runs this track's sessions: every session in it is the same one. */
+  agent: string;
   archivedAt: number | null;
   refs: Ref[];
 }
@@ -132,6 +136,17 @@ let doneOpen = false;
 /** Archived tracks, fetched alongside the done list so its entry can show a count. */
 let archivedTracks: Track[] = [];
 let sessions: any[] = [];
+/**
+ * Every agent the daemon can drive, with whether this machine can actually run
+ * it and why not. Arrives with the welcome, so the first new-track sheet already
+ * knows; empty only if an older daemon answered.
+ */
+let agents: { agent: string; cliVersion: string; available: boolean; notes: string[] }[] = [];
+/**
+ * The order the wizard offers them in, and the fallback when an older daemon
+ * sends no list at all — the choice must still be there, just without versions.
+ */
+const AGENT_CHOICES = ['claude', 'hermes'] as const;
 let openTabs: number[] = [];
 let activeTab: number | null = null;
 /**
@@ -380,19 +395,36 @@ async function applyFocus() {
 
 // ── sessions ────────────────────────────────────────────────────────────────
 
-const sessionIdOf = (ref: { externalId: string }) => ref.externalId.replace(/^claude:/, '');
+/**
+ * A session ref's external id is `<agent>:<id>`. An id with no prefix at all was
+ * written before there was more than one agent, so it is Claude's.
+ */
+const agentOfRef = (ref: { externalId: string }): string => {
+  const i = ref.externalId.indexOf(':');
+  return i < 0 ? 'claude' : ref.externalId.slice(0, i);
+};
+const sessionIdOf = (ref: { externalId: string }) => {
+  const i = ref.externalId.indexOf(':');
+  return i < 0 ? ref.externalId : ref.externalId.slice(i + 1);
+};
 const shortIdOf = (sessionId: string) => sessionId.replace(/-/g, '').slice(0, 8);
 
 /**
- * `claude attach` only works on BACKGROUND jobs. An interactive session is a
- * terminal someone else already owns; there is nothing for us to attach to.
+ * Only BACKGROUND sessions can be attached — `claude attach` for Claude, the
+ * session's own tmux for hermes. An interactive one is a terminal someone else
+ * already owns; there is nothing for us to attach to.
  */
 const liveSession = (ref: { externalId: string }) => {
   const id = sessionIdOf(ref);
-  // By job too, not just UUID: a background session that moves into a worktree
-  // is listed under a new UUID, but keeps the short id it was launched with.
+  const agent = agentOfRef(ref);
+  // By job too, not just UUID: a Claude background session that moves into a
+  // worktree is listed under a new UUID, but keeps the short id it was launched
+  // with. Every other agent runs a session under the key we gave it.
   return sessions.find(
-    (s) => s.sessionId === id || (s.kind === 'background' && s.shortId === shortIdOf(id)),
+    (s) =>
+      (s.agent ?? 'claude') === agent &&
+      (s.sessionId === id ||
+        (agent === 'claude' && s.kind === 'background' && s.shortId === shortIdOf(id))),
   );
 };
 const isAttachable = (ref: { externalId: string }) => liveSession(ref)?.kind === 'background';
@@ -904,6 +936,7 @@ const trackById = (id: number) =>
 const DETAIL_SKELETON = `
   <div class="thead">
     <div class="trow">
+      <button class="agent" id="agentbtn" hidden></button>
       <button class="shell" id="shell"></button>
       <span class="folder" id="folder"></span>
       <span class="court" id="whybtn" title="why?"></span>
@@ -1094,7 +1127,7 @@ function buildDetail(id: number) {
  */
 function patchHead(t: Track) {
   const m = mounted as NonNullable<typeof mounted>;
-  const sig = `${t.court}|${t.lifecycle}|${t.cwd}|${workingDir(t)}|${sessionRefsOf(t).length > 0}`;
+  const sig = `${t.court}|${t.lifecycle}|${t.cwd}|${workingDir(t)}|${sessionRefsOf(t).length > 0}|${t.agent}`;
   if (m.sig.head === sig) return;
   m.sig.head = sig;
 
@@ -1122,8 +1155,53 @@ function patchHead(t: Track) {
       });
   };
 
+  setAgentBadge(t);
   setFolderLabel(t);
   setShellButton(t);
+}
+
+/**
+ * Which agent runs this track, shown only when it is NOT the default: a badge on
+ * every track would be chrome you stop reading, where one that appears on two
+ * tracks out of ten is the exception it is meant to mark.
+ *
+ * It follows the same rule as the folder next to it, for the same reason — a
+ * session is run by the CLI that started it, so the choice is open until the
+ * track has one and settled afterwards.
+ */
+function setAgentBadge(t: Track) {
+  const el = $<HTMLButtonElement>('agentbtn');
+  const fixed = sessionRefsOf(t).length > 0;
+  // Nothing to say and nothing to change: a Claude track that already has a
+  // session is every track this app has ever had.
+  el.hidden = t.agent === 'claude' && fixed;
+  if (el.hidden) return;
+  el.textContent = t.agent;
+  el.className = `agent ${t.agent}`;
+  el.disabled = fixed;
+  el.title = fixed
+    ? `this track's sessions are run by ${t.agent} — that cannot change while it has any`
+    : `run this track's sessions with ${t.agent} — click to switch`;
+  el.onclick = () => void switchAgent(t);
+}
+
+/**
+ * Two agents means the badge is a toggle. With more it would want a menu; the
+ * daemon already sends the list, so that is a change here alone.
+ */
+async function switchAgent(t: Track) {
+  const next = t.agent === 'claude' ? 'hermes' : 'claude';
+  const usable = agents.find((a) => a.agent === next);
+  if (usable && !usable.available) {
+    showHint($('agentbtn'), usable.notes[0] ?? `${next} is not available`);
+    return;
+  }
+  try {
+    await window.omi.rpc('tracks.update', { id: t.id, patch: { agent: next } });
+    await refresh();
+  } catch (err) {
+    showHint($('agentbtn'), String((err as Error).message));
+  }
 }
 
 function setFolderLabel(t: Track) {
@@ -1197,15 +1275,15 @@ function patchSessbar(t: Track, session: Ref | undefined) {
         const holds = t.refs.filter(
           (x) => x.kind !== 'claude_session' && x.sessionId === r.externalId,
         ).length;
-        // A session's folder is fixed by Claude when it starts, so one that is not
-        // the track's own folder is worth saying out loud.
+        // A session's folder is fixed by the agent when it starts, so one that
+        // is not the track's own folder is worth saying out loud.
         const cwd = liveSession(r)?.cwd;
         const where = cwd && cwd !== t.cwd ? `\n${cwd}` : '';
         // The count of what it holds belongs in the tooltip, not on the chip.
         const held = holds === 0 ? '' : `\n${holds} ref${holds === 1 ? '' : 's'} linked here`;
         return `<div class="sess ${session?.externalId === r.externalId ? 'on' : ''}"
                    data-sid="${esc(r.externalId)}"
-                   title="${esc((state ? `${state} · ${sessionIdOf(r)}` : sessionIdOf(r)) + where + held)}">
+                   title="${esc(`${agentOfRef(r)} · ${state ? `${state} · ` : ''}${sessionIdOf(r)}${where}${held}`)}">
         <span class="dot ${STATE_COURT[state] ?? 'PARKED'}"></span>
         <span class="sname">${esc(r.label ?? shortIdOf(sessionIdOf(r)))}</span>
         ${
@@ -1337,7 +1415,9 @@ async function startSession(trackId: number) {
   const clock = setInterval(tickStartClock, 1000);
   try {
     const r = await window.omi.rpc('tracks.startSession', { id: trackId });
-    if (r?.session?.sessionId) activeSession[trackId] = `claude:${r.session.sessionId}`;
+    if (r?.session?.sessionId) {
+      activeSession[trackId] = `${r.session.agent ?? cur.agent}:${r.session.sessionId}`;
+    }
     saveTabs();
     // Still "starting" until the listing has it: until then there is nothing to
     // attach to, and the pane would say the session is not running.
@@ -1427,8 +1507,9 @@ function fmtTokens(n: number): string {
 }
 
 /**
- * What the session on screen has spent, above its refs. Read from the
- * transcript by the daemon, so it works for a session that has stopped too.
+ * What the session on screen has spent, above its refs. Read by the daemon from
+ * whatever the agent keeps — Claude's transcript, hermes' session store — so it
+ * works for a session that has stopped too.
  * Context comes first: it is the number you act on — it says when a
  * conversation has grown heavy enough to compact or start over — where the
  * totals only ever go up.
@@ -1448,8 +1529,9 @@ function patchUsage(t: Track, session: Ref | undefined) {
   const stored = sessionIdOf(session);
   const live = liveSession(session);
   const ids = live && live.sessionId !== stored ? [stored, live.sessionId] : [stored];
+  const agent = agentOfRef(session);
   void window.omi
-    .rpc('sessions.usage', { ids, cwd: live?.cwd ?? t.cwd ?? '' })
+    .rpc('sessions.usage', { ids, agent, cwd: live?.cwd ?? t.cwd ?? '' })
     .then((u: any) => {
       const m = mounted;
       if (!m || m.trackId !== t.id || el.dataset.sid !== sid || !el.isConnected) return;
@@ -1458,23 +1540,33 @@ function patchUsage(t: Track, session: Ref | undefined) {
       const row = (k: string, v: string, tip = '') =>
         `<div class="kv" ${tip ? `title="${esc(tip)}"` : ''}><span class="rk">${k}</span><span class="kvv">${v}</span></div>`;
       // The id the CLI resumes by: the live one, since /clear moves a session on.
-      const id = live?.sessionId ?? stored;
-      let html = `<div class="shead"><span class="rk">SESSION</span>${copy(id)}</div>`;
+      const id = u?.sessionId ?? session.agentSessionId ?? live?.sessionId ?? stored;
+      const known = agent === 'claude' || !!(u?.sessionId ?? session.agentSessionId);
+      let html = `<div class="shead"><span class="rk">SESSION</span>${
+        known
+          ? copy(id)
+          : '<span class="kvv muted" title="hermes files a conversation under an id of its own on its first message">assigned on first message</span>'
+      }</div>`;
+      html += row('agent', esc(agent), `this track's sessions are run by ${agent}`);
       if (!u || u.requests === 0) {
         html += '<div class="muted pad">nothing spent yet</div>';
       } else {
         const input = u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens;
         const cached = input > 0 ? Math.round((u.cacheReadTokens / input) * 100) : 0;
         html +=
-          row(
-            'context',
-            `${fmtTokens(u.contextTokens)} tokens`,
-            'what the last request sent: how much the conversation weighs now. Drops after a compaction.',
-          ) +
+          // Not every agent records what its last request sent, and a made-up
+          // number would look exactly as authoritative as a real one.
+          (u.contextTokens === null || u.contextTokens === undefined
+            ? ''
+            : row(
+                'context',
+                `${fmtTokens(u.contextTokens)} tokens`,
+                'what the last request sent: how much the conversation weighs now. Drops after a compaction.',
+              )) +
           row(
             'output',
             fmtTokens(u.outputTokens),
-            `tokens written by Claude, thinking included, over ${u.requests} requests`,
+            `tokens written by the agent, thinking included, over ${u.requests} requests`,
           ) +
           row(
             'input',
@@ -1482,6 +1574,15 @@ function patchUsage(t: Track, session: Ref | undefined) {
             `fresh ${u.inputTokens.toLocaleString()} · cache read ${u.cacheReadTokens.toLocaleString()} · cache write ${u.cacheWriteTokens.toLocaleString()}\n` +
               "from the transcript: the CLI's own side requests (titles, classifiers) are not in it",
           ) +
+          // Only where the agent prices the conversation itself. See
+          // SessionUsage.costUsd for why Claude deliberately has no figure here.
+          (typeof u.costUsd === 'number'
+            ? row(
+                'cost',
+                u.costUsd < 0.01 ? '<$0.01' : `$${u.costUsd.toFixed(2)}`,
+                `${esc(agent)}'s own figure for this conversation`,
+              )
+            : '') +
           (u.gitBranch
             ? row('branch', u.gitBranch === 'HEAD' ? 'detached' : copy(u.gitBranch))
             : '');
@@ -1567,7 +1668,7 @@ function mountPendingStart(t: Track) {
   const where = t.cwd ? esc(shortPath(t.cwd)) : "this track's folder";
   if (failed === undefined) {
     wrap.innerHTML = `<div class="empty" role="status">
-      <span class="spin"></span> starting a new Claude session in <b>${where}</b>…
+      <span class="spin"></span> starting a new ${esc(t.agent)} session in <b>${where}</b>…
       <div class="muted" id="startclock"></div>
       </div>`;
     tickStartClock();
@@ -1592,9 +1693,10 @@ function mountTerminal(t: Track, session: Ref | undefined) {
     return;
   }
   const live = session ? liveSession(session) : undefined;
-  // The job's own short id, which is what `claude attach` takes.
+  // The job's own short id, which is what an attach takes.
   const shortId = live?.kind === 'background' ? (live.shortId as string) : null;
-  const viewId = shortId ? `claude:${shortId}` : null;
+  const agent = session ? agentOfRef(session) : t.agent;
+  const viewId = shortId ? `${agent}:${shortId}` : null;
   // Only a session that is gone from the listing can be missing its transcript.
   const has = session && !live ? transcriptOf(session.externalId) : undefined;
   const key = viewId ?? `none:${session?.externalId ?? ''}:${live?.kind ?? ''}:${has ?? ''}`;
@@ -1615,7 +1717,7 @@ function mountTerminal(t: Track, session: Ref | undefined) {
     // Fit BEFORE opening: the pty is spawned with whatever cols/rows we pass,
     // and the default 80x24 is almost never what the pane is.
     fitTerm(v);
-    void openPty(shortId as string, viewId, t.cwd);
+    void openPty(shortId as string, agent, viewId, t.cwd);
     // Switching session is a deliberate act, so put the cursor where the user
     // is now looking — unless they are mid-sentence in one of the fields, which
     // focusTerminal() checks for us.
@@ -1682,12 +1784,12 @@ function mountTerminal(t: Track, session: Ref | undefined) {
     };
 
     if (!has) {
-      // Its transcript is gone — deleted, or cleaned up by Claude — so resume
+      // Its transcript is gone — deleted, or cleaned up by the agent — so resume
       // has nothing to load. The refs are still ours; a fresh session takes them
       // and the dead tab goes, instead of leaving a corpse to click past.
       wrap.innerHTML = `<div class="empty">
         <b>${label}</b> cannot be resumed.<br><br>
-        Claude no longer has its transcript, so there is nothing to pick up from.<br>
+        ${esc(t.agent)} no longer has its transcript, so there is nothing to pick up from.<br>
         A fresh session in ${t.cwd ? esc(shortPath(t.cwd)) : "this track's folder"} takes its place${
           holds > 0 ? `, keeping its ${refCount}` : ''
         }.
@@ -2054,6 +2156,8 @@ function onPickerKey(e: KeyboardEvent) {
  */
 interface Wizard {
   cwd: string | null;
+  /** Which CLI this track's sessions will be run by. */
+  agent: string;
   picked: Set<string>;
   fresh: boolean;
   busy: string | null;
@@ -2071,9 +2175,9 @@ let wizard: Wizard | null = null;
  * `refresh()` path, the same way `pickFolder` already does on-demand `listDir`
  * calls instead of pre-loading the whole filesystem.
  */
-async function fetchPast(cwd: string | null): Promise<any[]> {
+async function fetchPast(cwd: string | null, agent: string): Promise<any[]> {
   if (!cwd) return [];
-  return window.omi.rpc('sessions.past', { cwd }).catch(() => []);
+  return window.omi.rpc('sessions.past', { cwd, agent }).catch(() => []);
 }
 
 function setWizardCwd(cwd: string | null) {
@@ -2081,15 +2185,45 @@ function setWizardCwd(cwd: string | null) {
   if (!w) return;
   w.cwd = cwd;
   w.picked.clear();
+  reloadWizardPast();
+}
+
+/**
+ * The session list belongs to one folder AND one agent — they are different
+ * histories — so changing either reloads it and drops whatever was ticked in the
+ * other one.
+ */
+function reloadWizardPast() {
+  const w = wizard;
+  if (!w) return;
+  const { cwd, agent } = w;
   w.past = [];
   w.pastLoading = !!cwd;
   renderWizard();
-  void fetchPast(cwd).then((rows) => {
-    if (!wizard || wizard.cwd !== cwd) return; // folder changed again meanwhile
+  void fetchPast(cwd, agent).then((rows) => {
+    // Folder or agent changed again meanwhile: this answer is about neither.
+    if (!wizard || wizard.cwd !== cwd || wizard.agent !== agent) return;
     wizard.past = rows;
     wizard.pastLoading = false;
     renderWizard();
   });
+}
+
+/** Sessions the picked agent is running in the picked folder. */
+function sessionsHere(w: Wizard): any[] {
+  return w.cwd ? sessions.filter((s) => s.cwd === w.cwd && (s.agent ?? 'claude') === w.agent) : [];
+}
+
+/**
+ * The agent a new track starts on: whichever was chosen last, so a week spent in
+ * one of them stops asking. Falls back to the default, and never lands on an
+ * agent this machine cannot run.
+ */
+function preferredAgent(): string {
+  const last = localStorage.getItem('omi.agent') ?? 'claude';
+  const usable = agents.find((a) => a.agent === last);
+  if (usable && !usable.available) return 'claude';
+  return last;
 }
 
 function openWizard() {
@@ -2099,6 +2233,7 @@ function openWizard() {
   keysSheet = false;
   wizard = {
     cwd: null,
+    agent: preferredAgent(),
     picked: new Set(),
     fresh: false,
     busy: null,
@@ -2116,11 +2251,32 @@ function renderWizard() {
   host.hidden = false;
 
   const recent = [...new Set(tracks.map((t) => t.cwd).filter((c): c is string => !!c))].slice(0, 6);
-  const here = w.cwd ? sessions.filter((s) => s.cwd === w.cwd) : [];
+  const here = sessionsHere(w);
+  /**
+   * The agent comes first because it decides what the list at the bottom can
+   * contain: sessions belong to one CLI, and you cannot pick one before you know
+   * whose history you are looking at. Every agent is always shown — an option
+   * that silently disappears is indistinguishable from a bug — so one that
+   * cannot run here is disabled and says why underneath.
+   */
+  const agentRow = AGENT_CHOICES.map((id) => {
+    const info = agents.find((a) => a.agent === id);
+    const off = info ? !info.available : false;
+    const sub = off ? (info?.notes[0] ?? 'not available') : (info?.cliVersion ?? '');
+    const tip = off ? (info?.notes.join(' · ') ?? '') : `run this track's sessions with ${id}`;
+    return `<button type="button" class="seg ${id === w.agent ? 'on' : ''}" data-agent="${id}"
+                   ${off ? 'disabled' : ''} title="${esc(tip)}">
+              <span class="segname">${id}</span>
+              <span class="segsub">${esc(sub)}</span>
+            </button>`;
+  }).join('');
 
   host.innerHTML = `
     <form class="sheet" id="wiz">
       <div class="whead">NEW TRACK</div>
+
+      <label class="wlab">agent</label>
+      <div class="wseg">${agentRow}</div>
 
       <label class="wlab">folder</label>
       <div class="wrow">
@@ -2138,7 +2294,7 @@ function renderWizard() {
           : ''
       }
 
-      <label class="wlab">sessions in this folder</label>
+      <label class="wlab">${esc(w.agent)} sessions in this folder</label>
       <div class="wsess">
         <label class="wopt">
           <input type="checkbox" id="wfresh" ${w.fresh ? 'checked' : ''} ${w.cwd ? '' : 'disabled'} />
@@ -2200,6 +2356,23 @@ function renderWizard() {
   for (const c of document.querySelectorAll<HTMLElement>('.chip')) {
     c.onclick = () => setWizardCwd(String(c.dataset.cwd));
   }
+  for (const b of document.querySelectorAll<HTMLElement>('.seg[data-agent]')) {
+    b.onclick = () => {
+      const w2 = wizard;
+      const next = String(b.dataset.agent);
+      if (!w2 || w2.agent === next) return;
+      w2.agent = next;
+      // Remembered on the pick, not on create: a cancelled sheet still tells us
+      // which agent the user reaches for.
+      try {
+        localStorage.setItem('omi.agent', next);
+      } catch {
+        // Private mode, or storage full. The default is still a good default.
+      }
+      w2.picked.clear();
+      reloadWizardPast();
+    };
+  }
   for (const b of document.querySelectorAll<HTMLInputElement>('[data-sess]')) {
     b.onchange = () => {
       if (!wizard) return;
@@ -2237,6 +2410,7 @@ async function createFromWizard() {
     title,
     question: null,
     cwd: w.cwd,
+    agent: w.agent,
   });
   for (const sessionId of w.picked) {
     await window.omi.rpc('tracks.attachSession', { id: track.id, sessionId }).catch(() => {});
@@ -2248,7 +2422,9 @@ async function createFromWizard() {
     }
     try {
       const r = await window.omi.rpc('tracks.startSession', { id: track.id });
-      if (r?.session?.sessionId) activeSession[track.id] = `claude:${r.session.sessionId}`;
+      if (r?.session?.sessionId) {
+        activeSession[track.id] = `${r.session.agent ?? w.agent}:${r.session.sessionId}`;
+      }
     } catch (err) {
       // The track is already real; a failed launch must not lose it. Say so and
       // leave the track open so the user can retry from the session strip.
@@ -2297,8 +2473,9 @@ function openAttachSheet(trackId: number) {
   };
   $('modal').innerHTML = ''; // a sheet left up for another track must be rebuilt, not patched
   renderModal();
-  const cwd = tracks.find((x) => x.id === trackId)?.cwd ?? null;
-  void fetchPast(cwd).then((rows) => {
+  const t = tracks.find((x) => x.id === trackId);
+  const cwd = t?.cwd ?? null;
+  void fetchPast(cwd, t?.agent ?? 'claude').then((rows) => {
     if (!attachSheet || attachSheet.trackId !== trackId) return;
     attachSheet.past = rows;
     attachSheet.pastLoading = false;
@@ -2328,7 +2505,7 @@ function renderAttachSheet() {
 
   host.innerHTML = `
     <form class="sheet" id="att">
-      <div class="whead">ATTACH A SESSION</div>
+      <div class="whead">ATTACH A ${esc(t.agent.toUpperCase())} SESSION</div>
       <div class="wpath">${t.cwd ? esc(t.cwd) : '<span class="muted">this track has no folder — showing everything</span>'}</div>
       <input id="atsearch" class="wsearch" value="${esc(a.query)}" placeholder="search sessions…"
              aria-label="search sessions" autocomplete="off" spellcheck="false" />
@@ -2360,7 +2537,7 @@ function renderAttachSheet() {
     for (const sessionId of attachSheet.picked) {
       await window.omi.rpc('tracks.attachSession', { id: a.trackId, sessionId }).catch(() => {});
     }
-    if (first) activeSession[a.trackId] = `claude:${first}`;
+    if (first) activeSession[a.trackId] = `${t.agent}:${first}`;
     saveTabs();
     closeModal();
     await refresh();
@@ -2382,9 +2559,10 @@ function patchAttachList() {
       .filter(Boolean),
   );
   const linkedIds = new Set(sessionRefsOf(t).map(sessionIdOf));
-  const inFolder = sessions.filter((s) => !t.cwd || a.all || s.cwd === t.cwd);
+  const mine = sessions.filter((s) => (s.agent ?? 'claude') === t.agent);
+  const inFolder = mine.filter((s) => !t.cwd || a.all || s.cwd === t.cwd);
   const free = inFolder.filter((s) => !linked.has(s));
-  const hiddenByFolder = sessions.length - inFolder.length;
+  const hiddenByFolder = mine.length - inFolder.length;
   // Scoped to the track's own folder only — the "other folders" toggle below
   // stays live-only; browsing past sessions across arbitrary folders is a much
   // bigger feature than "attach one that ran here before".
@@ -2602,17 +2780,18 @@ function closeModal() {
 // ── pty ─────────────────────────────────────────────────────────────────────
 
 const openedPtys = new Set<string>();
-/** Forgets a view whose `claude attach` is gone, so the next open spawns a new one. */
+/** Forgets a view whose attach is gone, so the next open spawns a new one. */
 function dropPty(viewId: string) {
   if (openedPtys.delete(viewId)) terms.get(viewId)?.term.reset();
 }
-async function openPty(shortId: string, viewId: string, cwd: string | null) {
+async function openPty(shortId: string, agent: string, viewId: string, cwd: string | null) {
   if (openedPtys.has(viewId)) return;
   openedPtys.add(viewId);
   const t = termFor(viewId);
   try {
     const info = await window.omi.rpc('pty.open', {
       shortId,
+      agent,
       cols: t.term.cols,
       rows: t.term.rows,
       cwd,
@@ -2850,9 +3029,10 @@ async function refresh() {
 
 async function boot() {
   // Still waited on: it is how we know the daemon answered before the first
-  // rpc. Nothing is displayed — the version belonged in a status bar we do not
-  // have room for.
-  await window.omi.welcome();
+  // rpc. The versions belong in a status bar we do not have room for; the agent
+  // list is used by the new-track sheet, which is why it is kept.
+  const hello = await window.omi.welcome();
+  if (Array.isArray(hello?.agents)) agents = hello.agents;
 
   $('new').onclick = () => openWizard();
   // The tab list closes on any click outside it, like any menu would.

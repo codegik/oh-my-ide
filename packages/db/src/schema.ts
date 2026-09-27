@@ -200,9 +200,36 @@ ALTER TABLE track ADD COLUMN archived_at INTEGER;
 CREATE INDEX track_archived ON track(archived_at DESC) WHERE archived_at IS NOT NULL;
 `;
 
+/**
+ * Migration 0005. A track chooses its agent.
+ *
+ * Sessions are per-track, so the agent is too: every conversation in a track is
+ * run by the same CLI, and the track is the only place the choice has to be
+ * recorded. Two nullable-or-defaulted columns, so both are plain ADD COLUMNs
+ * with no table rebuild:
+ *
+ * - `track.agent` — which CLI this track's sessions are run by. Every track that
+ *   existed before this migration was Claude's, which is what the default says.
+ * - `track_ref.agent_session_id` — the id the agent itself files a conversation
+ *   under, when that is not the key we run it by. Hermes writes its session row
+ *   on the first message, so a session we just started has our key and no id of
+ *   its own for a while; this is where the id lands once it appears, and it is
+ *   what `--resume` and every usage lookup use afterwards.
+ *
+ * The court enum keeps `ON_CLAUDE` and refs keep `claude_session`: they are the
+ * value every row already holds and every rule already matches on, and renaming
+ * them would be a rebuild of two referenced tables to change a word the UI does
+ * not show. The UI reads "THINKING".
+ */
+export const MIGRATION_0005 = `
+ALTER TABLE track ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude';
+ALTER TABLE track_ref ADD COLUMN agent_session_id TEXT;
+`;
+
 export const MIGRATIONS: { version: number; sql: string }[] = [
   { version: 1, sql: MIGRATION_0001 },
   { version: 2, sql: MIGRATION_0002 },
   { version: 3, sql: MIGRATION_0003 },
   { version: 4, sql: MIGRATION_0004 },
+  { version: 5, sql: MIGRATION_0005 },
 ];

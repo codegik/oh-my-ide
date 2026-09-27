@@ -41,6 +41,9 @@ importers:
       '@omi/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@omi/hermes-adapter':
+        specifier: workspace:*
+        version: link:../../packages/hermes-adapter
       '@omi/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -78,6 +81,9 @@ importers:
 
   packages/claude-adapter:
     dependencies:
+      '@omi/core':
+        specifier: workspace:*
+        version: link:../core
       zod:
         specifier: ^4.1.13
         version: 4.6.5
@@ -98,6 +104,19 @@ importers:
         version: 7.6.13
 
   packages/gh-adapter: {}
+
+  packages/hermes-adapter:
+    dependencies:
+      '@omi/core':
+        specifier: workspace:*
+        version: link:../core
+      better-sqlite3:
+        specifier: ^13.0.3
+        version: 13.0.3
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
 
   packages/integrations: {}
 

@@ -11,8 +11,9 @@ Read order: this file → [`decisions/`](decisions/) → [`PLAN.md`](PLAN.md).
 
 ## What this is
 
-A local-first Electron cockpit for a staff engineer running many parallel Claude
-Code sessions. It exists to fix three stated frustrations:
+A local-first Electron cockpit for a staff engineer running many parallel agent
+sessions — Claude Code, or Hermes Agent (see ADR 0003). It exists to fix three
+stated frustrations:
 
 1. losing Claude sessions when terminals close
 2. Slack threads, Jira tickets, PRs and sessions not being bound to each other
@@ -81,9 +82,12 @@ recolours a court.
 ```
 packages/
   protocol/        binary framing + control message schemas. No deps but zod.
-  core/            PURE, zero I/O: court derivation, ref URL parsing. All logic worth testing.
-  db/              better-sqlite3, migration 0001, repositories. Daemon is the SOLE writer.
-  claude-adapter/  THE quarantine — the only place allowed to know ~/.claude or the CLI exist.
+  core/            PURE, zero I/O: court derivation, ref URL parsing, the agent-neutral
+                   session contract both adapters implement. All logic worth testing.
+  db/              better-sqlite3, migrations 0001-0005, repositories. Daemon is the SOLE writer.
+  claude-adapter/  A quarantine — the only place allowed to know ~/.claude or the `claude` CLI exist.
+  hermes-adapter/  The other one — ~/.hermes, the `hermes` CLI, and the tmux that keeps its
+                   sessions alive (ADR 0003).
 apps/
   daemon/          omid: socket server, PTY hub, session→ref sync, court recompute tick.
   desktop/         Electron main (dumb frame proxy) + preload + renderer.
@@ -102,13 +106,20 @@ release.sh         cut a release; also owns the PGP key that signs packages.
 ### Architectural spine
 
 ```
-Electron (disposable) ──unix socket──▶ omid (restartable) ──documented CLI──▶ Claude supervisor
-                                          │                                    (owns the sessions)
-                                          └── SQLite (sole writer)
+                                                  ┌─ documented CLI ─▶ Claude supervisor
+Electron (disposable) ──unix socket──▶ omid ──────┤                     (owns the sessions)
+                                          │       └─ tmux ────────────▶ hermes --tui
+                                          └── SQLite (sole writer)       (tmux owns the session)
 ```
 
-The daemon owns **no session lifetime**. That is why quitting the app cannot lose
-a session, and why `systemctl --user restart` / a daemon crash costs nothing.
+The daemon owns **no session lifetime**, whichever agent is running. That is why
+quitting the app cannot lose a session, and why `systemctl --user restart` / a
+daemon crash costs nothing.
+
+**Which agent runs a session is a property of its Track** — one track, one CLI,
+chosen in the new-track sheet and fixed once the track has a session. The daemon
+routes by the track, or by the `claude:` / `hermes:` prefix a session ref
+carries. See ADR 0003 for why, and for what hermes does and does not give us.
 
 ---
 
@@ -123,6 +134,7 @@ a session, and why `systemctl --user restart` / a daemon crash costs nothing.
 | `claude logs <id>` returns raw ANSI | dumped it through `cat -v` |
 | native modules match Electron's ABI | `tools/scripts/verify-abi.mjs`, ABI 149 |
 | the terminal pipeline works | real PTY output rendered in the app, screenshotted |
+| `hermes --tui` survives in detached tmux, attaches, resumes | ADR 0003's table — driven through the built daemon and the real window |
 
 ---
 
@@ -163,6 +175,19 @@ and still has no electron binary to run. `./start.sh` fetches it on first build;
 code. `./start.sh build` does packages before apps. Tests dodge this entirely by
 aliasing `@omi/*` to source in `vitest.config.ts`.
 
+**tmux's `=name` exact match only works on SESSION targets.** `attach`/`has`/
+`kill-session` take it; `capture-pane`, `send-keys` and `set-option` do not, and
+answer `can't find pane: =omi-h-…`. Our `set-option` calls failed silently that
+way for an afternoon. Related: tmux `set-titles on` overwrites the terminal
+title with the user's own format, and the daemon reads that title to NAME a
+session — every hermes session in the strip was called `iomarchy:omi-hermes-work`
+until we turned it off. Both are in ADR 0003.
+
+**A hermes session has no hermes id until its first message.** It is keyed by
+ours (the tmux name) and `track_ref.agent_session_id` records hermes' own id when
+it appears. Anything that resumes or prices a session needs that column, not the
+ref's external id.
+
 **`claude agents --json` rows are not uniform.** Background rows carry
 `id`/`state`; interactive rows carry `pid`/`status`. `packages/claude-adapter/src/agents.ts`
 exists mostly to collapse that into one shape.
@@ -172,9 +197,10 @@ exists mostly to collapse that into one shape.
 ## State of play
 
 Working: track CRUD, paste-to-link (GitHub/Slack/Jira/path/URL, pure regex),
-attach a background session with a live interactive terminal, derived court with
-a why-popover and pins, merged timeline, notes, tabs that survive restart, and a
-tray icon with notifications (below).
+attach a background session with a live interactive terminal, **a track that runs
+on Claude or on hermes** (ADR 0003), derived court with a why-popover and pins,
+merged timeline, notes, tabs that survive restart, and a tray icon with
+notifications (below).
 
 Not built: the `gh` poller (**so PR refs have no live state and no `gh.*` court
 rule can ever fire**), branch-based auto-join, the triage inbox, Slack/Jira/

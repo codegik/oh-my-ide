@@ -1,5 +1,5 @@
-import type { Court, RefKind, TrackRef, TrackSnapshot } from '@omi/core';
-import { effective } from '@omi/core';
+import type { AgentId, Court, RefKind, TrackRef, TrackSnapshot } from '@omi/core';
+import { effective, toAgentId } from '@omi/core';
 import Database from 'better-sqlite3';
 import { MIGRATIONS } from './schema.js';
 
@@ -16,6 +16,8 @@ export interface TrackRow {
   originActor: string | null;
   cwd: string | null;
   gitBranch: string | null;
+  /** Which CLI runs this track's sessions. Every track has exactly one. */
+  agent: AgentId;
   lifecycle: 'open' | 'done' | 'dropped';
   court: string;
   courtReason: string | null;
@@ -72,13 +74,14 @@ export class Db {
     originUrl?: string | null;
     cwd?: string | null;
     gitBranch?: string | null;
+    agent?: AgentId;
   }): TrackRow {
     const now = Date.now();
     const info = this.db
       .prepare(
         `INSERT INTO track (public_id, title, question, origin_kind, origin_url, cwd,
-                            git_branch, last_activity_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                            git_branch, agent, last_activity_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         ulid(),
@@ -88,6 +91,7 @@ export class Db {
         o.originUrl ?? null,
         o.cwd ?? null,
         o.gitBranch ?? null,
+        toAgentId(o.agent),
         now,
         now,
         now,
@@ -186,6 +190,7 @@ export class Db {
       waitingOn: string | null;
       cwd: string | null;
       gitBranch: string | null;
+      agent: AgentId;
       lifecycle: 'open' | 'done' | 'dropped';
     }>,
   ): TrackRow | null {
@@ -199,6 +204,7 @@ export class Db {
       waitingOn: 'waiting_on',
       cwd: 'cwd',
       gitBranch: 'git_branch',
+      agent: 'agent',
       lifecycle: 'lifecycle',
     };
     for (const [k, v] of Object.entries(patch)) {
@@ -226,6 +232,30 @@ export class Db {
         if (n.n > 0) {
           throw new Error(
             `this track has ${n.n} session${n.n === 1 ? '' : 's'} bound to ${cur.cwd}; its folder cannot change`,
+          );
+        }
+      }
+    }
+
+    /**
+     * The agent is fixed by the same rule as the folder, and for the same
+     * reason: a session is run by the CLI that started it, and nothing here can
+     * hand a running conversation to a different one. So the choice is open
+     * until the track has a session, and settled afterwards.
+     */
+    if (patch.agent !== undefined) {
+      const cur = this.db.prepare('SELECT agent FROM track WHERE id = ?').get(id) as
+        | { agent: string }
+        | undefined;
+      if (cur && cur.agent !== patch.agent) {
+        const n = this.db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM track_ref WHERE track_id = ? AND kind = 'claude_session'",
+          )
+          .get(id) as { n: number };
+        if (n.n > 0) {
+          throw new Error(
+            `this track has ${n.n} ${cur.agent} session${n.n === 1 ? '' : 's'}; its agent cannot change`,
           );
         }
       }
@@ -263,6 +293,8 @@ export class Db {
     externalId: string;
     /** '' (the default) scopes the ref to the whole track rather than one session. */
     sessionId?: string | null;
+    /** For a session ref whose agent files it under an id of its own. */
+    agentSessionId?: string | null;
     url?: string | null;
     label?: string | null;
     role?: string;
@@ -275,10 +307,14 @@ export class Db {
     this.db
       .prepare(
         `INSERT INTO track_ref (track_id, session_id, kind, external_id, url, label, role, state,
-                                body, auto_linked, link_rule, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                body, auto_linked, link_rule, agent_session_id,
+                                created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
          ON CONFLICT(track_id, session_id, kind, external_id) DO UPDATE SET
-           url=excluded.url, label=excluded.label, state=excluded.state, updated_at=excluded.updated_at`,
+           url=excluded.url, label=excluded.label, state=excluded.state,
+           -- A discovered id is never unlearned by a later write that has none.
+           agent_session_id=COALESCE(excluded.agent_session_id, agent_session_id),
+           updated_at=excluded.updated_at`,
       )
       .run(
         o.trackId,
@@ -292,6 +328,7 @@ export class Db {
         o.body ?? null,
         o.autoLinked ? 1 : 0,
         o.linkRule ?? null,
+        o.agentSessionId ?? null,
         now,
         now,
       );
@@ -334,11 +371,17 @@ export class Db {
   }
 
   /** Every session ref across all tracks, for matching a pty view to a track. */
-  listSessionRefs(): { id: number; trackId: number; externalId: string; label: string | null }[] {
+  listSessionRefs(): {
+    id: number;
+    trackId: number;
+    externalId: string;
+    label: string | null;
+    agentSessionId: string | null;
+  }[] {
     return (
       this.db
         .prepare(
-          `SELECT id, track_id, external_id, label FROM track_ref
+          `SELECT id, track_id, external_id, label, agent_session_id FROM track_ref
             WHERE kind = 'claude_session'`,
         )
         .all() as Record<string, unknown>[]
@@ -347,7 +390,30 @@ export class Db {
       trackId: r.track_id as number,
       externalId: r.external_id as string,
       label: (r.label as string | null) ?? null,
+      agentSessionId: (r.agent_session_id as string | null) ?? null,
     }));
+  }
+
+  /**
+   * Records the id an agent gave a conversation we started under a key of our
+   * own. Written once, when it is first discovered; never overwritten, because
+   * the second answer would be about a different conversation.
+   */
+  setRefAgentSessionId(externalId: string, agentSessionId: string): number[] {
+    const rows = this.db
+      .prepare(
+        `SELECT track_id FROM track_ref
+          WHERE kind = 'claude_session' AND external_id = ? AND agent_session_id IS NULL`,
+      )
+      .all(externalId) as { track_id: number }[];
+    if (rows.length === 0) return [];
+    this.db
+      .prepare(
+        `UPDATE track_ref SET agent_session_id = ?, updated_at = ?
+          WHERE kind = 'claude_session' AND external_id = ? AND agent_session_id IS NULL`,
+      )
+      .run(agentSessionId, Date.now(), externalId);
+    return [...new Set(rows.map((r) => r.track_id))];
   }
 
   setRefLabel(refId: number, label: string): void {
@@ -636,6 +702,7 @@ export class Db {
       state: (r.state as string | null) ?? null,
       isBlocking: (r.is_blocking as number) === 1,
       sessionId: (r.session_id as string | null) ?? '',
+      agentSessionId: (r.agent_session_id as string | null) ?? null,
     }));
   }
 
@@ -651,6 +718,7 @@ export class Db {
       originActor: (r.origin_actor as string | null) ?? null,
       cwd: (r.cwd as string | null) ?? null,
       gitBranch: (r.git_branch as string | null) ?? null,
+      agent: toAgentId(r.agent),
       lifecycle: r.lifecycle as TrackRow['lifecycle'],
       court: r.court as string,
       courtReason: (r.court_reason as string | null) ?? null,

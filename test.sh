@@ -7,9 +7,9 @@
 # all that is broken. Anything started here — the smoke-test daemon and its
 # scratch folder — is stopped and removed on exit, including on failure or ^C.
 #
-# Never touches your own daemon, database or Claude sessions: the smoke test
-# runs a separate daemon on its own socket and database, and the Claude checks
-# only read (`claude agents`, a version probe).
+# Never touches your own daemon, database or agent sessions: the smoke test runs
+# a separate daemon on its own socket and database, and the agent checks only
+# read (`claude agents`, `hermes --version`, the hermes session store).
 set -uo pipefail
 
 cd "$(dirname "$0")"
@@ -23,6 +23,8 @@ usage: ./test.sh
     unit tests     vitest
     live CLI       contract tests against the installed claude (skipped without it)
     daemon smoke   boots the built daemon on a scratch socket and database
+                   (OMI_SMOKE_HERMES=1 also starts and stops a real hermes
+                   session, which is the only way to test the tmux substrate)
     lint           biome: lint rules, formatting and import order
 
   Exits non-zero if setup or any step fails.

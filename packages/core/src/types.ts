@@ -28,6 +28,12 @@ export interface TrackRef {
    * any session is blocked on still puts the whole track in someone's court.
    */
   sessionId: string;
+  /**
+   * For a session ref: the id its own agent files the conversation under, when
+   * that is not the key we run it by. Null for every other kind of ref, and for
+   * a session whose agent has not written one yet.
+   */
+  agentSessionId: string | null;
 }
 
 export interface TrackSnapshot {

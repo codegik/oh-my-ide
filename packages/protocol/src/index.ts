@@ -32,6 +32,22 @@ export const Welcome = z.object({
     tier: z.enum(['supported', 'degraded', 'unsupported']),
     notes: z.array(z.string()),
   }),
+  /**
+   * Every agent the daemon can drive, and whether this machine can actually run
+   * it. The wizard needs this before it can offer a choice, and it arrives with
+   * the welcome so the first new-track sheet is never a guess.
+   */
+  agents: z
+    .array(
+      z.object({
+        agent: z.string(),
+        cliVersion: z.string(),
+        tier: z.enum(['supported', 'degraded', 'unsupported']),
+        available: z.boolean(),
+        notes: z.array(z.string()),
+      }),
+    )
+    .optional(),
 });
 
 export const Rpc = z.object({

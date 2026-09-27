@@ -12,6 +12,7 @@ export default defineConfig({
       '@omi/core': pkg('core'),
       '@omi/protocol': pkg('protocol'),
       '@omi/claude-adapter': pkg('claude-adapter'),
+      '@omi/hermes-adapter': pkg('hermes-adapter'),
       '@omi/db': pkg('db'),
     },
   },

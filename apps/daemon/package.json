@@ -10,6 +10,7 @@
     "@omi/claude-adapter": "workspace:*",
     "@omi/core": "workspace:*",
     "@omi/db": "workspace:*",
+    "@omi/hermes-adapter": "workspace:*",
     "@omi/protocol": "workspace:*",
     "better-sqlite3": "^13.0.3",
     "node-pty": "^1.1.0",

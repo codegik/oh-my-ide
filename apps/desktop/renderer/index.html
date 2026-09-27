@@ -150,6 +150,15 @@
   .fin { flex:none; align-self:center; background:transparent; color:var(--dim); border:1px solid var(--line);
          border-radius:5px; padding:3px 11px; cursor:pointer; font:inherit; font-size:var(--fs-xs); }
   .fin:hover { color:var(--text); border-color:var(--dim); }
+  /* Which agent runs this track, shown only when it is worth saying (see
+     setAgentBadge). Deliberately NOT a court colour: it says who is working,
+     never whose turn it is, and reusing a court hue here would make those two
+     questions look like one. */
+  .agent { flex:none; background:#1d2230; color:var(--dim); border:1px solid var(--line);
+           border-radius:999px; padding:2px 9px; font:inherit; font-size:var(--fs-xs);
+           letter-spacing:.4px; cursor:pointer; }
+  .agent:hover:not(:disabled) { color:var(--text); border-color:var(--dim); }
+  .agent:disabled { cursor:default; opacity:.85; }
   .folder { flex:1; min-width:0; font-size:var(--fs-xs); color:var(--dim); cursor:pointer;
             overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .folder:hover { color:var(--text); }
@@ -282,6 +291,18 @@
   .chip { background:#1a1e29; color:var(--dim); border:1px solid var(--line); border-radius:999px;
           padding:3px 10px; font:inherit; font-size:var(--fs-xs); cursor:pointer; }
   .chip.on { background:#1d2230; color:var(--text); border-color:var(--dim); }
+  /* One button per agent, sized by the text so two of them do not stretch into
+     a toolbar. The version under each name is the honest version of a tooltip:
+     it is how you tell whether the thing you are about to use is even there. */
+  .wseg { display:flex; gap:6px; }
+  .seg { display:flex; flex-direction:column; gap:1px; align-items:flex-start;
+         background:#0b0d12; color:var(--dim); border:1px solid var(--line); border-radius:6px;
+         padding:6px 12px; font:inherit; cursor:pointer; }
+  .seg:hover:not(:disabled) { border-color:var(--dim); color:var(--text); }
+  .seg.on { background:#1d2230; color:var(--text); border-color:var(--accent); }
+  .seg:disabled { cursor:default; opacity:.5; }
+  .segname { font-size:var(--fs-s); }
+  .segsub { font-size:var(--fs-xs); color:var(--dim); }
   .wsess { border:1px solid var(--line); border-radius:6px; padding:4px; background:#0b0d12; }
   .wopt { display:flex; align-items:center; gap:8px; padding:5px 7px; border-radius:5px;
           font-size:var(--fs-s); cursor:pointer; }

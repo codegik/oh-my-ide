@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import type { SessionUsage } from '@omi/core';
 import { CLAUDE_HOME, safeOpen } from './safe-fs.js';
 
 /**
@@ -8,29 +9,10 @@ import { CLAUDE_HOME, safeOpen } from './safe-fs.js';
  * an estimate — but it is tokens only. Dollars would need a price table that
  * goes stale on the next pricing change, and the CLI's own `cost-state` line is
  * only written when a session exits, so it lies about a session still running.
+ *
+ * The shape itself is agent-neutral and lives in `@omi/core`: the side panel
+ * renders one block whoever produced the numbers.
  */
-export interface SessionUsage {
-  sessionId: string;
-  /** The model of the most recent turn, e.g. `claude-opus-5`. */
-  model: string | null;
-  gitBranch: string | null;
-  /**
-   * What the most recent request sent — fresh input plus cache reads and
-   * writes. It is how much the conversation weighs right now, and it drops
-   * after a compaction; the totals below never do.
-   */
-  contextTokens: number;
-  /** API requests, each counted once however many lines it was split over. */
-  requests: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  /** Subagents run by this session: their tokens are in the totals above too. */
-  subagents: number;
-  subagentTokens: number;
-  lastActivityAt: number | null;
-}
 
 interface Totals {
   requests: number;
@@ -230,6 +212,9 @@ export function sessionUsage(sessionIds: string[], cwdHint?: string): SessionUsa
     cacheWriteTokens: 0,
     subagents: 0,
     subagentTokens: 0,
+    // See SessionUsage.costUsd: the CLI's own figure is only written when a
+    // session exits, so it lies about one still running.
+    costUsd: null,
     lastActivityAt: null,
   };
   const add = (t: Totals) => {
