@@ -198,6 +198,18 @@ ours (the tmux name) and `track_ref.agent_session_id` records hermes' own id whe
 it appears. Anything that resumes or prices a session needs that column, not the
 ref's external id.
 
+**The user's own tmux bindings eat keys we send to hermes.** A hermes session
+lives in tmux, tmux reads every keystroke before hermes does, and a key it has a
+binding for never arrives. Shift+Enter used to go out as ESC CR (Meta+Enter) for
+every agent — which this machine's `~/.config/tmux/tmux.conf` binds to
+`split-window`, so the pane split and the newline was lost; with tmux's
+`escape-time` short enough for the ESC and the CR to be read apart, the CR alone
+lands and the half-written prompt is SENT. Anything the pane synthesizes for a
+hermes session has to be a sequence no tmux binding claims: the kitty-protocol
+CSI u form (`\x1b[13;2u` for Shift+Enter) passes through, because hermes turns on
+extended keys when it sees tmux and tmux forwards them to an app that asked. See
+`apps/desktop/src/renderer/keys.ts`.
+
 **`claude agents --json` rows are not uniform.** Background rows carry
 `id`/`state`; interactive rows carry `pid`/`status`. `packages/claude-adapter/src/agents.ts`
 exists mostly to collapse that into one shape.

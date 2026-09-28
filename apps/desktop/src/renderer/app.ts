@@ -1,5 +1,6 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
+import { newlineKeyFor } from './keys.js';
 
 /**
  * NOTE: deliberately vanilla TS, not React, for this slice. The plan calls for
@@ -285,15 +286,16 @@ function termFor(viewId: string) {
    * Returning true still lets xterm send the sequence on to the pty.
    *
    * xterm sends a bare CR for Shift+Enter, indistinguishable from Enter, so the
-   * Claude CLI submits instead of inserting a newline. Send ESC CR (Meta+Enter)
-   * instead, the same thing `claude /terminal-setup` binds in native terminals.
+   * agent submits instead of inserting a newline. We send something it can tell
+   * apart instead, which is not the same sequence for every agent — see
+   * NEWLINE_KEY in ./keys.ts.
    * All event types are swallowed so the keypress can't also emit a CR.
    */
   term.attachCustomKeyEventHandler((e) => {
     if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
       if (e.type === 'keydown') {
         e.preventDefault();
-        window.omi.ptyInput(viewId, new TextEncoder().encode('\x1b\r'));
+        window.omi.ptyInput(viewId, new TextEncoder().encode(newlineKeyFor(viewId)));
       }
       return false;
     }
@@ -1618,16 +1620,22 @@ function patchUsage(t: Track, session: Ref | undefined) {
  * away by necessity — opening a track, switching session, closing a sheet — and
  * never on a data refresh, so a session going NEEDS_INPUT cannot yank the caret
  * out of the field you are typing in.
+ *
+ * Whether there is a terminal at all is the only question worth asking: the
+ * view ids that are NOT a live session (`start:…`, `none:…`) never get one, and
+ * every agent's does. Asking whether the id began with `claude:` instead is what
+ * left a hermes session needing a click in the pane before it took a keystroke.
  */
 function focusTerminal() {
-  if (!mounted?.viewId?.startsWith('claude:')) return;
+  if (!mounted?.viewId) return;
   const v = terms.get(mounted.viewId);
+  if (!v) return;
   const el = document.activeElement;
   // If the user is in an input, they chose that; leave them there.
   if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
     if (!el.classList.contains('xterm-helper-textarea')) return;
   }
-  v?.term.focus();
+  v.term.focus();
 }
 
 /**
@@ -1792,7 +1800,11 @@ function mountTerminal(t: Track, session: Ref | undefined) {
     const land = async (r: any) => {
       autoWoke.delete(session.externalId);
       dozed.delete(session.externalId);
-      if (r?.session?.sessionId) activeSession[t.id] = `claude:${r.session.sessionId}`;
+      // The agent the daemon says it started, falling back to the one whose
+      // session this resumes — a `claude:` prefix on a hermes id selects a
+      // session that does not exist, and the strip lands back on nothing.
+      if (r?.session?.sessionId)
+        activeSession[t.id] = `${r.session.agent ?? agentOfRef(session)}:${r.session.sessionId}`;
       saveTabs();
       await refresh();
       focusTerminal();
