@@ -110,8 +110,23 @@ ensure_electron() {
   ( cd node_modules/electron && node install.js )
 }
 
+# A root node_modules is not proof the install is current: a package added to
+# the workspace since the last install has no node_modules of its own, so its
+# workspace deps resolve to nothing and the build dies on "Cannot find module
+# '@omi/core'" — with pnpm's "node_modules missing, did you mean to install?"
+# buried above the stack trace. pnpm writes .modules.yaml when it installs, so
+# any manifest newer than that means the tree is behind them.
+needs_install() {
+  local stamp=node_modules/.modules.yaml
+  [ -f "$stamp" ] || return 0
+  find pnpm-lock.yaml pnpm-workspace.yaml package.json packages apps \
+       -path '*/node_modules' -prune -o \
+       \( -name package.json -o -name pnpm-lock.yaml -o -name pnpm-workspace.yaml \) \
+       -newer "$stamp" -print -quit 2>/dev/null | grep -q .
+}
+
 build() {
-  [ -d node_modules ] || pnpm install
+  if needs_install; then pnpm install; fi
   ensure_electron
   # Order matters: apps bundle these, so a stale dist silently ships old code.
   pnpm --filter @omi/protocol --filter @omi/core --filter @omi/claude-adapter \
