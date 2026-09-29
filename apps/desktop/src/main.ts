@@ -86,28 +86,29 @@ class DaemonClient {
   welcome: unknown = null;
   /** Set by whoever cares that a track moved; the tray does. */
   onChanged: () => void = () => void 0;
-  private welcomeReady!: Promise<unknown>;
-  private resolveWelcome!: (v: unknown) => void;
+  /**
+   * Whoever asked for the welcome before one arrived. A list, not a promise
+   * re-armed per connection: a window that opens onto a stale daemon asks
+   * during the restart, and has to be answered by the daemon that replaces it —
+   * not left holding a promise from a connection that was thrown away.
+   */
+  private welcomeWaiters: ((v: unknown) => void)[] = [];
   private reconnectTimer: NodeJS.Timeout | null = null;
   private closed = false;
   /** One restart per skew, so a daemon we cannot refresh never becomes a loop. */
   private replacedStaleDaemon = false;
 
-  constructor() {
-    this.armWelcome();
-  }
-
-  private armWelcome(): void {
-    this.welcomeReady = new Promise((r) => {
-      this.resolveWelcome = r;
+  whenWelcome(timeoutMs = 15_000): Promise<unknown> {
+    if (this.welcome) return Promise.resolve(this.welcome);
+    return new Promise((resolve) => {
+      const done = (v: unknown) => {
+        clearTimeout(timer);
+        this.welcomeWaiters = this.welcomeWaiters.filter((w) => w !== done);
+        resolve(v);
+      };
+      const timer = setTimeout(() => done(null), timeoutMs);
+      this.welcomeWaiters.push(done);
     });
-  }
-
-  whenWelcome(timeoutMs = 5000): Promise<unknown> {
-    return Promise.race([
-      this.welcomeReady,
-      new Promise((r) => setTimeout(() => r(null), timeoutMs)),
-    ]);
   }
 
   async connect(): Promise<void> {
@@ -148,7 +149,12 @@ class DaemonClient {
       if (this.restartIfStale(msg)) return;
       const reconnected = this.welcome !== null;
       this.welcome = msg;
-      this.resolveWelcome(msg);
+      for (const w of [...this.welcomeWaiters]) w(msg);
+      // Every welcome carries what the daemon can run. Pushed, not only
+      // returned, so a window that already booted without it catches up.
+      for (const w of BrowserWindow.getAllWindows()) {
+        w.webContents.send('omi:event', { t: 'welcome', agents: msg.agents });
+      }
       // A daemon that restarted has no pty views any more. Tell the renderer so
       // it can re-attach instead of sitting in front of a dead terminal until
       // someone reloads the window — surviving a daemon restart is the whole
@@ -225,7 +231,6 @@ class DaemonClient {
     if (this.closed || this.reconnectTimer) return;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      this.armWelcome();
       void this.connect().catch(() => this.scheduleReconnect(Math.min(delayMs * 2, 10_000)));
     }, delayMs);
   }

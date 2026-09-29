@@ -356,6 +356,16 @@ window.omi.onEvent((msg) => {
     void refresh();
     return;
   }
+  if (msg?.t === 'welcome') {
+    // Sent on every (re)connect, so an agent list the window booted without —
+    // the daemon was still starting, or being swapped for the current build —
+    // fills in by itself instead of leaving an agent greyed out.
+    if (Array.isArray(msg.agents) && msg.agents.length > 0) {
+      agents = msg.agents;
+      if (wizard && !wizard.busy) renderModal();
+    }
+    return;
+  }
   if (msg?.t === 'reconnected') {
     // The daemon came back, which means every pty view it owned is gone. Drop
     // what we think is open and let the next render re-attach; the Terminal
@@ -2268,7 +2278,32 @@ function preferredAgent(): string {
   return last;
 }
 
+/**
+ * Ask for the agent list when the window does not have one. The welcome
+ * normally carries it, but a window can boot before any daemon answered; the
+ * `welcome` event covers a reconnect, and this covers the rest. A failure is
+ * left for the next try — a missing list only ever means "checking".
+ */
+let agentsInFlight: Promise<void> | null = null;
+function ensureAgents(): Promise<void> {
+  if (agents.length > 0) return Promise.resolve();
+  agentsInFlight ??= window.omi
+    .rpc('agents.list')
+    .then((list) => {
+      if (Array.isArray(list) && list.length > 0) {
+        agents = list;
+        if (wizard && !wizard.busy) renderModal();
+      }
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      agentsInFlight = null;
+    });
+  return agentsInFlight;
+}
+
 function openWizard() {
+  void ensureAgents();
   const recent = [...new Set(tracks.map((t) => t.cwd).filter((c): c is string => !!c))];
   attachSheet = null;
   archiveSheet = null;
@@ -2304,21 +2339,21 @@ function renderWizard() {
   const agentRow = AGENT_CHOICES.map((id) => {
     const info = agents.find((a) => a.agent === id);
     /**
-     * No list at all means the daemon predates agents entirely — it would take
-     * the choice and start a Claude session anyway, which is worse than saying
-     * so. The app restarts such a daemon on connect (see daemonSkew); this is
-     * what the sheet shows in the moment before that lands.
+     * No list yet means the daemon has not answered — it is starting, or being
+     * replaced with the current build (see daemonSkew). That is ours to sort
+     * out, not the user's: the option waits, quietly, and `ensureAgents` or the
+     * next welcome fills it in.
      */
     const unknown = agents.length === 0 && id !== 'claude';
     const off = unknown || (info ? !info.available : false);
     const sub = unknown
-      ? 'daemon out of date — reopen the app'
+      ? 'checking…'
       : off
         ? (info?.notes[0] ?? 'not available')
         : (info?.cliVersion ?? '');
     const tip = off
       ? unknown
-        ? 'this daemon does not know about other agents; it is being replaced with the current build'
+        ? `checking whether ${id} can run here`
         : (info?.notes.join(' · ') ?? '')
       : `run this track's sessions with ${id}`;
     return `<button type="button" class="seg ${id === w.agent ? 'on' : ''}" data-agent="${id}"
@@ -3090,6 +3125,7 @@ async function boot() {
   // list is used by the new-track sheet, which is why it is kept.
   const hello = await window.omi.welcome();
   if (Array.isArray(hello?.agents)) agents = hello.agents;
+  void ensureAgents();
 
   $('new').onclick = () => openWizard();
   // The tab list closes on any click outside it, like any menu would.
