@@ -307,6 +307,35 @@ async function listDir(
 }
 
 /**
+ * Creates the folder the picker was given (and any missing parents), so a new
+ * project can start from a name that doesn't exist yet. Only ever a folder: a
+ * file already sitting at that path is reported, never replaced.
+ */
+async function makeDir(
+  raw: string,
+): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+  if (typeof raw !== 'string' || !raw.trim()) return { ok: false, error: 'no folder' };
+  const home = os.homedir();
+  const expanded = raw === '~' || raw.startsWith('~/') ? home + raw.slice(1) : raw;
+  const abs = path.resolve(home, expanded);
+  try {
+    await fs.promises.mkdir(abs, { recursive: true });
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    const why =
+      code === 'EEXIST' || code === 'ENOTDIR'
+        ? 'a file is in the way'
+        : code === 'EACCES' || code === 'EPERM'
+          ? 'permission denied'
+          : e instanceof Error
+            ? e.message
+            : String(e);
+    return { ok: false, error: `could not create ${raw}: ${why}` };
+  }
+  return { ok: true, path: abs };
+}
+
+/**
  * Opens the user's own terminal in `dir`, which the renderer takes from the
  * session on screen: a background job that moved into a worktree is not where
  * its track is, and the folder you want a shell in is the one it works in.
@@ -545,6 +574,10 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'omi:listDir',
     guard((_e, raw: string) => listDir(raw)),
+  );
+  ipcMain.handle(
+    'omi:makeDir',
+    guard((_e, raw: string) => makeDir(raw)),
   );
   ipcMain.handle(
     'omi:openTerminal',

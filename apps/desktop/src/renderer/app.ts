@@ -15,6 +15,7 @@ declare global {
       welcome(): Promise<any>;
       openExternal(url: string): Promise<void>;
       listDir(raw: string): Promise<{ home: string; path: string; dirs: string[] } | null>;
+      makeDir(raw: string): Promise<{ ok: true; path: string } | { ok: false; error: string }>;
       openTerminal(dir: string): Promise<{ ok: boolean; error?: string }>;
       ptyInput(viewId: string, bytes: Uint8Array): void;
       onPty(cb: (viewId: string, epoch: number, offset: string, bytes: Uint8Array) => void): void;
@@ -2085,17 +2086,18 @@ function closePicker(dir: string | null) {
   p.resolve(dir);
 }
 
-function setPickerHint(msg: string | null) {
+function setPickerHint(msg: string | null, bad = msg !== null) {
   const el = document.getElementById('fphint');
   if (!el) return;
   el.textContent = msg ?? PICKER_HINT;
-  el.classList.toggle('bad', msg !== null);
+  el.classList.toggle('bad', bad);
 }
 
 async function suggest() {
   const p = picker;
   if (!p) return;
-  const [parent, prefix] = splitPath($<HTMLInputElement>('fpin').value);
+  const value = $<HTMLInputElement>('fpin').value;
+  const [parent, prefix] = splitPath(value);
   const seq = ++p.seq;
   let dirs = p.cache.get(parent);
   if (dirs === undefined) {
@@ -2107,7 +2109,10 @@ async function suggest() {
   // With a name half typed, the best match is one keypress away; right after a
   // slash nothing is, so Enter means the folder you are standing in.
   p.sel = prefix && p.matches.length > 0 ? 0 : -1;
-  setPickerHint(dirs ? null : `${parent || '~'} is not a folder`);
+  // A path that isn't there yet is a folder Enter will make, not a mistake —
+  // unless a match is highlighted, in which case Enter takes that instead.
+  const missing = dirs === null || (prefix !== '' && !dirs.includes(prefix));
+  setPickerHint(missing && p.sel < 0 ? `enter creates ${value.replace(/\/+$/, '')}` : null, false);
   renderPickerList(dirs === null ? '' : prefix ? 'no match' : 'no folders in here');
 }
 
@@ -2149,11 +2154,18 @@ async function choose() {
   const typed = p.sel >= 0 ? splitPath(value)[0] + p.matches[p.sel] : value;
   const r = await window.omi.listDir(typed || '~');
   if (picker !== p) return;
-  if (!r) {
-    setPickerHint(`${typed} is not a folder`);
+  if (r) {
+    closePicker(r.path);
     return;
   }
-  closePicker(r.path);
+  // Not there yet: make it, so a new project can start from the picker.
+  const made = await window.omi.makeDir(typed);
+  if (picker !== p) return;
+  if (!made.ok) {
+    setPickerHint(made.error);
+    return;
+  }
+  closePicker(made.path);
 }
 
 function onPickerKey(e: KeyboardEvent) {
