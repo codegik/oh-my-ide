@@ -1,6 +1,6 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
-import { newlineKeyFor } from './keys.js';
+import { clipboardKeyFor, newlineKeyFor, pastesImageOnEmpty } from './keys.js';
 
 /**
  * NOTE: deliberately vanilla TS, not React, for this slice. The plan calls for
@@ -255,6 +255,45 @@ if (window.omi.osFont.ui) {
 /** Whole pixels: xterm measures cells from this, and a fraction blurs the grid. */
 const TERM_FONT_PX = Math.round(window.omi.osFont.mono ?? 14);
 
+/**
+ * The terminal's selection onto the system clipboard. The selection stays up,
+ * as it does in a terminal, so a second copy or a look at what was taken both
+ * still work.
+ */
+async function copyFromTerm(term: Terminal) {
+  const text = term.getSelection();
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (err) {
+    console.warn('[clipboard] copy failed', err);
+  }
+}
+
+/**
+ * The clipboard into the session. `term.paste` is what a terminal does with it:
+ * newlines normalised to CR and the text wrapped in bracketed paste when the
+ * agent asked for it, so a multi-line paste lands as one block instead of being
+ * sent line by line.
+ *
+ * No text on the clipboard usually means an image. Hermes reads an empty
+ * bracketed paste as exactly that and attaches the image itself; Claude has its
+ * own Ctrl+V for images, which is why its ^V is left alone.
+ */
+async function pasteIntoTerm(viewId: string, term: Terminal) {
+  let text = '';
+  try {
+    text = await navigator.clipboard.readText();
+  } catch (err) {
+    console.warn('[clipboard] paste failed', err);
+    return;
+  }
+  if (text) term.paste(text);
+  else if (pastesImageOnEmpty(viewId)) {
+    window.omi.ptyInput(viewId, new TextEncoder().encode('\x1b[200~\x1b[201~'));
+  }
+}
+
 function termFor(viewId: string) {
   let t = terms.get(viewId);
   if (t) return t;
@@ -291,12 +330,26 @@ function termFor(viewId: string) {
    * apart instead, which is not the same sequence for every agent — see
    * NEWLINE_KEY in ./keys.ts.
    * All event types are swallowed so the keypress can't also emit a CR.
+   *
+   * Copy and paste are ours too, for every chord Omarchy can hand us — see
+   * clipboardKeyFor in ./keys.ts. preventDefault on the keydown is what keeps
+   * Chromium from also firing its own paste into xterm's textarea: without it
+   * Ctrl+Shift+V / Shift+Insert would paste twice.
    */
   term.attachCustomKeyEventHandler((e) => {
     if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
       if (e.type === 'keydown') {
         e.preventDefault();
         window.omi.ptyInput(viewId, new TextEncoder().encode(newlineKeyFor(viewId)));
+      }
+      return false;
+    }
+    const clip = clipboardKeyFor(viewId, e, term.hasSelection());
+    if (clip) {
+      if (e.type === 'keydown') {
+        e.preventDefault();
+        if (clip === 'copy') void copyFromTerm(term);
+        else void pasteIntoTerm(viewId, term);
       }
       return false;
     }
