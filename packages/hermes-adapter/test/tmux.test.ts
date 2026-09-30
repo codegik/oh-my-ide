@@ -1,5 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { keyOfTmux, parseSessions, TMUX_PREFIX, tmuxName } from '../src/tmux.js';
+import { attachArgv, keyOfTmux, parseSessions, TMUX_PREFIX, tmuxName } from '../src/tmux.js';
+
+describe('attachArgv', () => {
+  // Omarchy sets `detach-on-destroy off`: without this, a tab whose session ends
+  // is silently switched to another session's terminal.
+  it('makes the client detach, not wander, when its session ends', () => {
+    let argv: { args: string[] };
+    try {
+      argv = attachArgv('omi-h-abc');
+    } catch {
+      return; // no tmux on this machine
+    }
+    expect(argv.args).toEqual([
+      'set-option',
+      '-t',
+      'omi-h-abc',
+      'detach-on-destroy',
+      'on',
+      ';',
+      'attach-session',
+      '-t',
+      '=omi-h-abc',
+    ]);
+  });
+});
 
 describe('session names', () => {
   it('round-trips a key', () => {

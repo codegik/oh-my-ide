@@ -229,8 +229,30 @@ export async function newSession(o: {
   }
 }
 
+/**
+ * `detach-on-destroy on` is set as part of attaching, not left to the user's
+ * config. Omarchy ships `detach-on-destroy off`, and with that, when the session
+ * a pane is attached to ends (e.g. it was resumed under a new key), tmux does
+ * not detach: it SWITCHES the client to another session. The tab then shows a
+ * different conversation's terminal under its own label and dot. Setting it on
+ * the session at attach time covers sessions created before this was added too.
+ * `set-option` parses a pane target, so it gets the bare name (see `exact`).
+ */
 export function attachArgv(name: string): { file: string; args: string[] } {
-  return { file: tmuxBin(), args: ['attach-session', '-t', exact(name)] };
+  return {
+    file: tmuxBin(),
+    args: [
+      'set-option',
+      '-t',
+      name,
+      'detach-on-destroy',
+      'on',
+      ';',
+      'attach-session',
+      '-t',
+      exact(name),
+    ],
+  };
 }
 
 export async function killSession(name: string): Promise<void> {
