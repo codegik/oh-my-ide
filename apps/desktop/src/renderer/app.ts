@@ -1629,6 +1629,19 @@ function patchUsage(t: Track, session: Ref | undefined) {
           : '<span class="kvv muted" title="hermes files a conversation under an id of its own on its first message">assigned on first message</span>'
       }</div>`;
       html += row('agent', esc(agent), `this track's sessions are run by ${agent}`);
+      // Where the session is, before what it spent: both matter from the first
+      // keystroke, and a worktree is exactly what you lose track of.
+      const where = live?.cwd;
+      if (where && where !== t.cwd) {
+        html += row(
+          'worktree',
+          `<button type="button" class="copy" data-copy="${esc(where)}" title="${esc(where)} — click to copy">${esc(shortPath(where))}</button>`,
+          `the session is working in ${where}, not the track's folder`,
+        );
+      }
+      if (u?.gitBranch) {
+        html += row('branch', u.gitBranch === 'HEAD' ? 'detached' : copy(u.gitBranch));
+      }
       if (!u || u.requests === 0) {
         html += '<div class="muted pad">nothing spent yet</div>';
       } else {
@@ -1663,9 +1676,6 @@ function patchUsage(t: Track, session: Ref | undefined) {
                 u.costUsd < 0.01 ? '<$0.01' : `$${u.costUsd.toFixed(2)}`,
                 `${esc(agent)}'s own figure for this conversation`,
               )
-            : '') +
-          (u.gitBranch
-            ? row('branch', u.gitBranch === 'HEAD' ? 'detached' : copy(u.gitBranch))
             : '');
       }
       if (m.sig.usage === html) return;

@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StoreSession } from '../src/store.js';
 
@@ -69,7 +73,9 @@ function row(over: Partial<StoreSession> = {}): StoreSession {
 }
 
 /** A store that answers from what a test puts in it, and nothing else. */
-function fakeStore(o: { rows?: StoreSession[]; busy?: string[] } = {}) {
+function fakeStore(
+  o: { rows?: StoreSession[]; busy?: string[]; shell?: Record<string, string> } = {},
+) {
   const rows = o.rows ?? [];
   return {
     available: () => true,
@@ -77,6 +83,7 @@ function fakeStore(o: { rows?: StoreSession[]; busy?: string[] } = {}) {
     byAnyId: (ids: string[]) => rows.find((r) => ids.includes(r.id)) ?? null,
     inFolder: (cwd: string) => rows.filter((r) => r.cwd === cwd || r.gitRepoRoot === cwd),
     newestIn: () => null,
+    shellCwd: (id: string) => o.shell?.[id] ?? null,
     busyIds: () => new Set(o.busy ?? []),
     reset: () => undefined,
     close: () => undefined,
@@ -160,6 +167,24 @@ describe('list', () => {
     const [s] = await r.list();
     expect(s?.agentSessionId).toBe(HID);
     expect(readMarker).not.toHaveBeenCalled();
+  });
+
+  /** The terminal button opens where the session is, so this is what it gets. */
+  it('reports the worktree the agent moved into, not the folder it was launched in', async () => {
+    listSessions.mockResolvedValue([tmuxRow()]);
+    const wt = '/home/me/repo/.claude/worktrees/fix';
+    const r = new HermesRunner(fakeStore({ rows: [row()], shell: { [HID]: wt } }));
+    r.remember('key1', HID);
+    const [s] = await r.list();
+    expect(s?.cwd).toBe(wt);
+  });
+
+  it('stays in its folder when the agent only cd-s into another project', async () => {
+    listSessions.mockResolvedValue([tmuxRow()]);
+    const r = new HermesRunner(fakeStore({ rows: [row()], shell: { [HID]: '/home/me/.hermes' } }));
+    r.remember('key1', HID);
+    const [s] = await r.list();
+    expect(s?.cwd).toBe('/home/me/repo');
   });
 });
 
@@ -264,6 +289,21 @@ describe('usage', () => {
 
   it('is null for a session hermes has never heard of', () => {
     expect(new HermesRunner(fakeStore()).usage(['key9'])).toBeNull();
+  });
+
+  /** Hermes leaves `git_branch` empty for most sessions; git knows. */
+  it('reads the branch from git where the shell is, over what hermes recorded', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'omi-branch-'));
+    try {
+      execFileSync('git', ['init', '-q', '-b', 'feature-x', repo]);
+      const r = new HermesRunner(
+        fakeStore({ rows: [row({ cwd: repo, gitBranch: null })], shell: { [HID]: repo } }),
+      );
+      r.remember('key1', HID);
+      expect(r.usage(['key1'])?.gitBranch).toBe('feature-x');
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
   });
 });
 

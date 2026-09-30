@@ -436,10 +436,18 @@ const methods: Record<string, Handler> = {
     const cwd = String(p.cwd ?? '').trim();
     if (!cwd) throw new Error('a folder is required to look up past sessions');
     const agent = toAgentId(p.agent);
-    const liveHere = (await listOne(agent)).filter((s) => s.cwd === cwd);
+    // Any live one, wherever it is now: a session that moved into a worktree is
+    // still running, not past. Hermes lists a live session under our key and
+    // its past ones under its own id, so both ids count.
+    const live = await listOne(agent);
     return runnerFor(agent)
       .past(cwd)
-      .filter((h) => !liveHere.some((s) => isRefOf(s, sessionKey(agent, h.sessionId))))
+      .filter(
+        (h) =>
+          !live.some(
+            (s) => s.agentSessionId === h.sessionId || isRefOf(s, sessionKey(agent, h.sessionId)),
+          ),
+      )
       .slice(0, 20);
   },
 

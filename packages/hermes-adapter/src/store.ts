@@ -212,6 +212,25 @@ export class HermesStore {
   }
 
   /**
+   * The folder the session's shell is in now, as of its last command.
+   *
+   * The row's own `cwd` is where hermes was launched and stays there when the
+   * agent `cd`s into a worktree. Every terminal result carries the shell's cwd
+   * after the command, so the newest one is where the work is happening.
+   */
+  shellCwd(id: string): string | null {
+    const rows = this.all(
+      `SELECT json_extract(content, '$.cwd') AS cwd FROM messages
+        WHERE session_id = ? AND role = 'tool' AND tool_name = 'terminal'
+          AND json_valid(content) AND json_extract(content, '$.cwd') IS NOT NULL
+        ORDER BY id DESC LIMIT 1`,
+      id,
+    );
+    const cwd = rows[0]?.cwd;
+    return typeof cwd === 'string' && cwd ? cwd : null;
+  }
+
+  /**
    * Conversations with a turn in flight right now.
    *
    * `session_turn_leases` is hermes' own answer to "is this session busy": a

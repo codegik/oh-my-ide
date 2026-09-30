@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import type {
   AgentCompat,
@@ -32,9 +33,39 @@ export function isHermesSessionId(id: string): boolean {
   return HERMES_ID.test(id);
 }
 
+/**
+ * The branch checked out in a folder, `HEAD` when detached (as Claude's
+ * transcripts say it), null outside a repo. argv form, never a shell.
+ */
+export function gitBranchOf(dir: string): string | null {
+  try {
+    const out = execFileSync('git', ['-C', dir, 'symbolic-ref', '--short', '-q', 'HEAD'], {
+      encoding: 'utf8',
+      timeout: 2_000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out || null;
+  } catch (err) {
+    // Exit 1 is a repo whose HEAD is not a branch; anything else is not a repo.
+    return (err as { status?: number }).status === 1 ? 'HEAD' : null;
+  }
+}
+
 /** Our own key for a session, used until (and after) hermes files one of its own. */
 function newKey(): string {
   return randomBytes(6).toString('hex');
+}
+
+/**
+ * Where a session is working: the folder its shell was last left in, but only
+ * inside the folder it was launched in. Worktrees — hermes' `.worktrees/`,
+ * Claude's `.claude/worktrees/` — live there; a `cd` into some other project to
+ * read its code is not the session moving.
+ */
+function workingIn(launched: string, shell: string | null): string {
+  if (!shell || !launched) return launched;
+  const root = launched.replace(/\/+$/, '');
+  return shell === root || shell.startsWith(`${root}/`) ? shell : launched;
 }
 
 /**
@@ -260,7 +291,9 @@ export class HermesRunner implements SessionRunner {
       // It survives the window closing and it can be attached to, which is
       // everything `background` means to the rest of the app.
       kind: 'background',
-      cwd: row?.cwd ?? t.cwd,
+      // Where the agent's shell is now — a worktree it moved into — rather than
+      // where hermes was launched. The terminal button opens here.
+      cwd: workingIn(row?.cwd ?? t.cwd, hid ? this.store.shellCwd(hid) : null),
       name: row?.title ?? null,
       startedAt: t.createdAt || row?.startedAt || 0,
       pid: t.pid,
@@ -315,10 +348,14 @@ export class HermesRunner implements SessionRunner {
     });
     const row = this.store.byAnyId(ids.length > 0 ? ids : sessionIds);
     if (!row) return null;
+    // Hermes records a branch only at launch, and not at all outside a repo or
+    // after the agent moves into a worktree. Asking git where the shell is now
+    // is the answer that stays true.
+    const dir = row.cwd ? workingIn(row.cwd, this.store.shellCwd(row.id)) : null;
     return {
       sessionId: row.id,
       model: row.model,
-      gitBranch: row.gitBranch,
+      gitBranch: (dir ? gitBranchOf(dir) : null) ?? row.gitBranch,
       /**
        * Hermes keeps per-session totals and nothing per request, and
        * `messages.token_count` is NULL for every row it writes — so there is no
