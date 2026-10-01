@@ -2375,7 +2375,7 @@ function openWizard() {
     cwd: null,
     agent: preferredAgent(),
     picked: new Set(),
-    fresh: false,
+    fresh: true,
     busy: null,
     focused: false,
     past: [],
