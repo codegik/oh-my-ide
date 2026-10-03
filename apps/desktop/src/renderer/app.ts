@@ -2426,6 +2426,10 @@ function renderWizard() {
             </button>`;
   }).join('');
 
+  // Re-rendering replaces every element, so the one holding focus is gone with
+  // it; carry focus over by id, or the next Enter lands on <body> and is lost.
+  const had = host.contains(document.activeElement) ? document.activeElement?.id : '';
+
   host.innerHTML = `
     <form class="sheet" id="wiz">
       <div class="whead">NEW TRACK</div>
@@ -2489,7 +2493,7 @@ function renderWizard() {
       ${w.busy ? `<div class="wbusy">${esc(w.busy)}</div>` : ''}
       <div class="wacts">
         <button type="button" id="wcancel" class="wbtn">cancel</button>
-        <button type="submit" class="wbtn primary" ${w.busy ? 'disabled' : ''}>create track</button>
+        <button type="submit" id="wgo" class="wbtn primary" ${w.busy ? 'disabled' : ''}>create track</button>
       </div>
     </form>`;
 
@@ -2501,12 +2505,17 @@ function renderWizard() {
   if (!w.busy && !w.focused) {
     w.focused = true;
     $('wpick').focus();
+  } else if (had) {
+    document.getElementById(had)?.focus();
   }
 
   $('wpick').onclick = async () => {
     const dir = await pickFolder($('wpick'), w.cwd);
     if (!dir) return;
     setWizardCwd(dir);
+    // The folder was the last thing to decide: the Enter after the one that
+    // picked it creates the track.
+    $('wgo').focus();
   };
   for (const c of document.querySelectorAll<HTMLElement>('.chip')) {
     c.onclick = () => setWizardCwd(String(c.dataset.cwd));
