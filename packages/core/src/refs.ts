@@ -16,9 +16,10 @@ export function parseRef(input: string): ParsedRef | null {
   const text = input.trim();
   if (!text) return null;
 
-  const gh = /^https?:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/(pull|issues)\/(\d+)/i.exec(
-    text,
-  );
+  const gh =
+    /^https?:\/\/(?:[\w-]+\.)*github[\w-]*(?:\.[\w-]+)*\/([\w.-]+)\/([\w.-]+)\/(pull|issues)\/(\d+)/i.exec(
+      text,
+    );
   if (gh) {
     const [, owner, repo, type, num] = gh;
     const isPr = type?.toLowerCase() === 'pull';
