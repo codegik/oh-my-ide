@@ -11,6 +11,15 @@ describe('parseRef', () => {
     });
   });
 
+  it('parses a GitHub PR on an enterprise host', () => {
+    expect(parseRef('https://github.enterprise.example.com/acme/api/pull/134')).toEqual({
+      kind: 'github_pr',
+      externalId: 'acme/api#134',
+      url: 'https://github.enterprise.example.com/acme/api/pull/134',
+      label: 'api#134',
+    });
+  });
+
   it('distinguishes issues from PRs', () => {
     expect(parseRef('https://github.com/acme/api/issues/12')?.kind).toBe('github_issue');
     expect(parseRef('https://github.com/acme/api/issues/12')?.externalId).toBe('acme/api!12');
