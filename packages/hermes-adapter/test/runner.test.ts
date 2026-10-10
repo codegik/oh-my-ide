@@ -137,6 +137,27 @@ describe('list', () => {
     expect(s?.state).toBe('NEEDS_PERMISSION');
   });
 
+  it('a turn blocked on a question to the user is NEEDS_INPUT, even though the lease is held', async () => {
+    listSessions.mockResolvedValue([tmuxRow()]);
+    vi.mocked(readMarker).mockReturnValue({ sessionId: HID, cwd: '/home/me/repo', at: 1 });
+    const store = fakeStore({
+      rows: [row({ lastActivityDescription: 'tool running: clarify' })],
+      busy: [HID],
+    });
+    const [s] = await new HermesRunner(store).list();
+    expect(s).toMatchObject({ state: 'NEEDS_INPUT', busy: false });
+  });
+
+  it('a finished question or any other tool keeps the turn WORKING', async () => {
+    listSessions.mockResolvedValue([tmuxRow()]);
+    vi.mocked(readMarker).mockReturnValue({ sessionId: HID, cwd: '/home/me/repo', at: 1 });
+    for (const d of ['tool completed: clarify (3.1s)', 'tool running: terminal']) {
+      const store = fakeStore({ rows: [row({ lastActivityDescription: d })], busy: [HID] });
+      const [s] = await new HermesRunner(store).list();
+      expect(s?.state).toBe('WORKING');
+    }
+  });
+
   /**
    * The window between opening a tab and typing in it: hermes has not written a
    * session row yet, so the state is inferred rather than reported.

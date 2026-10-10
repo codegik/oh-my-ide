@@ -77,6 +77,13 @@ function workingIn(launched: string, shell: string | null): string {
 const WANTS_ME = /approv|permission|confirm|waiting for you|awaiting input/i;
 
 /**
+ * A tool that blocks the turn until the user answers in the TUI. Hermes keeps
+ * the turn lease for the whole wait and stamps `tool running: <name>` every few
+ * seconds, so the lease alone would read as WORKING while it sits on a question.
+ */
+const ASKS_ME = /^tool running: (clarify|browser_vault_(save_login|enter_code|unlock))$/;
+
+/**
  * Hermes under a detached tmux session.
  *
  * Hermes has no `--bg`/`attach` pair of its own, so tmux owns session lifetime
@@ -281,9 +288,18 @@ export class HermesRunner implements SessionRunner {
     hid: string | null,
     busy: Set<string>,
   ): NormalizedSession {
-    const working = hid !== null && busy.has(hid);
-    const wantsMe = !working && WANTS_ME.test(row?.lastActivityDescription ?? '');
-    const state: SessionState = working ? 'WORKING' : wantsMe ? 'NEEDS_PERMISSION' : 'IDLE';
+    const desc = row?.lastActivityDescription ?? '';
+    const leased = hid !== null && busy.has(hid);
+    const asksMe = leased && ASKS_ME.test(desc);
+    const working = leased && !asksMe;
+    const wantsMe = !leased && WANTS_ME.test(desc);
+    const state: SessionState = asksMe
+      ? 'NEEDS_INPUT'
+      : working
+        ? 'WORKING'
+        : wantsMe
+          ? 'NEEDS_PERMISSION'
+          : 'IDLE';
     return {
       agent: this.agent,
       sessionId: t.key,
