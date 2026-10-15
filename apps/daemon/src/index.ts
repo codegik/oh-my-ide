@@ -111,14 +111,20 @@ function getCompat(): Promise<ClaudeCompat> {
 
 /**
  * What every agent can do, warmed at boot for the same reason the Claude probe
- * is: `hello` must never sit on a subprocess. Cached for the life of the daemon
- * except for a failure, which is retried — an agent installed while the app runs
- * should not need a restart to appear.
+ * is: `hello` must never sit on a subprocess. A failure is retried — an agent
+ * installed while the app runs should not need a restart to appear — and a
+ * caller passing `maxAgeMs` gets a fresh probe once the answer is older than
+ * that: the daemon outlives CLI updates, and the wizard must show the version
+ * that will actually run, not the one installed when the daemon started.
  */
+const AGENTS_MAX_AGE_MS = 30_000;
 const agentCompat = new Map<AgentId, AgentCompat>();
 let agentsPromise: Promise<AgentCompat[]> | null = null;
+let agentsProbedAt = 0;
 
-function probeAgents(): Promise<AgentCompat[]> {
+function probeAgents(maxAgeMs = Number.POSITIVE_INFINITY): Promise<AgentCompat[]> {
+  if (agentsPromise && Date.now() - agentsProbedAt > maxAgeMs) agentsPromise = null;
+  if (!agentsPromise) agentsProbedAt = Date.now();
   agentsPromise ??= Promise.all(
     AGENT_IDS.map((id) =>
       runnerFor(id)
@@ -422,7 +428,7 @@ const methods: Record<string, Handler> = {
    * cannot. The wizard shows every agent either way — an option that silently
    * disappears is indistinguishable from a bug — so this has to say why.
    */
-  'agents.list': async () => probeAgents(),
+  'agents.list': async () => probeAgents(AGENTS_MAX_AGE_MS),
 
   'sessions.list': async () => (await syncSessions()).sort((a, b) => b.startedAt - a.startedAt),
 

@@ -2346,10 +2346,14 @@ function preferredAgent(): string {
  * normally carries it, but a window can boot before any daemon answered; the
  * `welcome` event covers a reconnect, and this covers the rest. A failure is
  * left for the next try — a missing list only ever means "checking".
+ *
+ * `refresh` asks even when a list is there: the wizard re-reads it on every
+ * open so a CLI updated while the app runs shows its new version. The cached
+ * list stays on screen until the answer replaces it.
  */
 let agentsInFlight: Promise<void> | null = null;
-function ensureAgents(): Promise<void> {
-  if (agents.length > 0) return Promise.resolve();
+function ensureAgents(refresh = false): Promise<void> {
+  if (agents.length > 0 && !refresh) return Promise.resolve();
   agentsInFlight ??= window.omi
     .rpc('agents.list')
     .then((list) => {
@@ -2366,7 +2370,7 @@ function ensureAgents(): Promise<void> {
 }
 
 function openWizard() {
-  void ensureAgents();
+  void ensureAgents(true);
   const recent = [...new Set(tracks.map((t) => t.cwd).filter((c): c is string => !!c))];
   attachSheet = null;
   archiveSheet = null;
