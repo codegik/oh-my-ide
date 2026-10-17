@@ -74,7 +74,12 @@ function row(over: Partial<StoreSession> = {}): StoreSession {
 
 /** A store that answers from what a test puts in it, and nothing else. */
 function fakeStore(
-  o: { rows?: StoreSession[]; busy?: string[]; shell?: Record<string, string> } = {},
+  o: {
+    rows?: StoreSession[];
+    busy?: string[];
+    shell?: Record<string, string>;
+    reply?: Record<string, string>;
+  } = {},
 ) {
   const rows = o.rows ?? [];
   return {
@@ -84,6 +89,7 @@ function fakeStore(
     inFolder: (cwd: string) => rows.filter((r) => r.cwd === cwd || r.gitRepoRoot === cwd),
     newestIn: () => null,
     shellCwd: (id: string) => o.shell?.[id] ?? null,
+    lastReply: (id: string) => o.reply?.[id] ?? null,
     busyIds: () => new Set(o.busy ?? []),
     reset: () => undefined,
     close: () => undefined,
@@ -146,6 +152,39 @@ describe('list', () => {
     });
     const [s] = await new HermesRunner(store).list();
     expect(s).toMatchObject({ state: 'NEEDS_INPUT', busy: false });
+  });
+
+  it('a turn that ended on a question is NEEDS_INPUT, so the track lands on ON ME', async () => {
+    listSessions.mockResolvedValue([tmuxRow()]);
+    vi.mocked(readMarker).mockReturnValue({ sessionId: HID, cwd: '/home/me/repo', at: 1 });
+    for (const reply of [
+      "I'd go with option 2. Want me to run it?",
+      'Should I push it to **main?**\n',
+      'Which one (`a` or `b`)?',
+    ]) {
+      const store = fakeStore({ rows: [row()], reply: { [HID]: reply } });
+      const [s] = await new HermesRunner(store).list();
+      expect(s, reply).toMatchObject({ state: 'NEEDS_INPUT', busy: false });
+    }
+  });
+
+  it('a turn that ended on a report, not a question, stays IDLE', async () => {
+    listSessions.mockResolvedValue([tmuxRow()]);
+    vi.mocked(readMarker).mockReturnValue({ sessionId: HID, cwd: '/home/me/repo', at: 1 });
+    const store = fakeStore({
+      rows: [row()],
+      reply: { [HID]: 'Is it done? Yes: pushed to main as 85da33c.' },
+    });
+    const [s] = await new HermesRunner(store).list();
+    expect(s?.state).toBe('IDLE');
+  });
+
+  it('a question still being written, mid-turn, is WORKING', async () => {
+    listSessions.mockResolvedValue([tmuxRow()]);
+    vi.mocked(readMarker).mockReturnValue({ sessionId: HID, cwd: '/home/me/repo', at: 1 });
+    const store = fakeStore({ rows: [row()], busy: [HID], reply: { [HID]: 'Want me to?' } });
+    const [s] = await new HermesRunner(store).list();
+    expect(s?.state).toBe('WORKING');
   });
 
   it('a finished question or any other tool keeps the turn WORKING', async () => {

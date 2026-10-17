@@ -231,6 +231,22 @@ export class HermesStore {
   }
 
   /**
+   * What the agent said last, when it had the last word: the reply that closed
+   * its turn. Null once the user has answered, or while the newest row is a tool
+   * call or result rather than something said to the user.
+   */
+  lastReply(id: string): string | null {
+    const rows = this.all(
+      'SELECT role, content FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 1',
+      id,
+    );
+    const r = rows[0];
+    return r?.role === 'assistant' && typeof r.content === 'string' && r.content.trim()
+      ? r.content
+      : null;
+  }
+
+  /**
    * Conversations with a turn in flight right now.
    *
    * `session_turn_leases` is hermes' own answer to "is this session busy": a

@@ -47,3 +47,23 @@ describe('shellCwd', () => {
     expect(store.shellCwd('nobody')).toBeNull();
   });
 });
+
+describe('lastReply', () => {
+  it('is what the agent said when it had the last word', () => {
+    add.run('r1', 'user', 'fix it', null);
+    add.run('r1', 'assistant', '', null);
+    add.run('r1', 'tool', result('/repo'), 'terminal');
+    add.run('r1', 'assistant', 'Want me to run it?', null);
+    expect(store.lastReply('r1')).toBe('Want me to run it?');
+  });
+
+  it('is null once the user answered, or while a tool runs', () => {
+    add.run('r2', 'assistant', 'Want me to run it?', null);
+    add.run('r2', 'user', 'yes', null);
+    add.run('r3', 'assistant', '', null);
+    add.run('r3', 'tool', result('/repo'), 'terminal');
+    expect(store.lastReply('r2')).toBeNull();
+    expect(store.lastReply('r3')).toBeNull();
+    expect(store.lastReply('nobody')).toBeNull();
+  });
+});

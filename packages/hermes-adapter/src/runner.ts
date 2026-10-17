@@ -84,6 +84,14 @@ const WANTS_ME = /approv|permission|confirm|waiting for you|awaiting input/i;
 const ASKS_ME = /^tool running: (clarify|browser_vault_(save_login|enter_code|unlock))$/;
 
 /**
+ * A turn that ended on a question ("Want me to run it?"). Hermes releases the
+ * lease and the row looks like any finished turn, so the reply itself is the
+ * only sign the agent is waiting on an answer rather than done. Trailing
+ * markdown and closing quotes or brackets don't hide the question mark.
+ */
+const ENDS_ON_QUESTION = /\?[\s*_`'")\]]*$/;
+
+/**
  * Hermes under a detached tmux session.
  *
  * Hermes has no `--bg`/`attach` pair of its own, so tmux owns session lifetime
@@ -293,13 +301,10 @@ export class HermesRunner implements SessionRunner {
     const asksMe = leased && ASKS_ME.test(desc);
     const working = leased && !asksMe;
     const wantsMe = !leased && WANTS_ME.test(desc);
-    const state: SessionState = asksMe
-      ? 'NEEDS_INPUT'
-      : working
-        ? 'WORKING'
-        : wantsMe
-          ? 'NEEDS_PERMISSION'
-          : 'IDLE';
+    const asked =
+      !leased && !wantsMe && hid !== null && ENDS_ON_QUESTION.test(this.store.lastReply(hid) ?? '');
+    const state: SessionState =
+      asksMe || asked ? 'NEEDS_INPUT' : working ? 'WORKING' : wantsMe ? 'NEEDS_PERMISSION' : 'IDLE';
     return {
       agent: this.agent,
       sessionId: t.key,
