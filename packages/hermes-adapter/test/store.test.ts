@@ -67,3 +67,16 @@ describe('lastReply', () => {
     expect(store.lastReply('nobody')).toBeNull();
   });
 });
+
+describe('leasePids', () => {
+  it('is the pid each live lease names, and skips expired ones', () => {
+    db.exec(`CREATE TABLE session_turn_leases (
+      conversation_id TEXT PRIMARY KEY, holder TEXT, expires_at REAL)`);
+    const lease = db.prepare('INSERT INTO session_turn_leases VALUES (?, ?, ?)');
+    const now = Date.now() / 1000;
+    lease.run('a', 'pid=24587:pidns=4026531836:turn=a:a:d8250137:platform=tui', now + 60);
+    lease.run('b', 'pid=99:pidns=1:turn=b', now - 60);
+    lease.run('c', 'garbage', now + 60);
+    expect([...store.leasePids()]).toEqual([['a', 24587]]);
+  });
+});

@@ -11,6 +11,7 @@ import type {
   StartedSession,
 } from '@omi/core';
 import { findHermes, hermesBin, parseVersion, runHermes } from './cli.js';
+import { descendsFrom } from './proc.js';
 import { HermesStore, readMarker, type StoreSession } from './store.js';
 import {
   attachArgv,
@@ -234,11 +235,12 @@ export class HermesRunner implements SessionRunner {
   async list(): Promise<NormalizedSession[]> {
     const live = await listSessions();
     const busy = this.store.busyIds();
+    const leases = live.length ? this.store.leasePids() : new Map<string, number>();
     const out: NormalizedSession[] = [];
     const claimed = new Set<string>();
 
     for (const t of live) {
-      const hid = this.discover(t);
+      const hid = this.discover(t, live, leases);
       if (hid) claimed.add(hid);
       const row = hid ? this.store.byId(hid) : null;
       out.push(this.normalize(t, row, hid, busy));
@@ -278,16 +280,51 @@ export class HermesRunner implements SessionRunner {
    * the tty it took over — and the store is the fallback for the window before
    * that file appears. Both are gated on the tmux session's own start time, so
    * neither can hand back whatever used that pty before us.
+   *
+   * A known id is not forever: one TUI can close its conversation and carry on
+   * with another (`/new`, a context compression) without the tmux session
+   * noticing. A turn lease held by a process under our pane is the exact answer
+   * while a turn runs; between turns, a known session that hermes has ended is
+   * followed to the first one the same folder started after it.
    */
-  private discover(t: TmuxSession): string | null {
+  private discover(
+    t: TmuxSession,
+    live: TmuxSession[],
+    leases: Map<string, number>,
+  ): string | null {
+    const others = new Set(
+      live.flatMap((o) => {
+        const id = o.key === t.key ? undefined : this.ids.get(o.key);
+        return id ? [id] : [];
+      }),
+    );
+    const set = (id: string): string => {
+      this.ids.set(t.key, id);
+      return id;
+    };
+
+    if (t.pid) {
+      for (const [id, pid] of leases) {
+        if (!others.has(id) && descendsFrom(pid, t.pid)) return set(id);
+      }
+    }
+
     const known = this.ids.get(t.key);
-    if (known) return known;
+    if (known) {
+      const row = this.store.byId(known);
+      if (row?.endedAt && row.cwd) {
+        // A few seconds of slack: the next row can be stamped just before the
+        // old one is closed.
+        const next = this.store.firstAfter(row.cwd, row.source, row.endedAt - 5_000, others);
+        if (next && next.id !== known) return set(next.id);
+      }
+      return known;
+    }
     if (isHermesSessionId(t.key)) return t.key; // resumed under its own id
 
     const marker = readMarker(t.tty, t.createdAt);
     const found = marker?.sessionId ?? this.store.newestIn(t.cwd, t.createdAt)?.id ?? null;
-    if (found) this.ids.set(t.key, found);
-    return found;
+    return found ? set(found) : null;
   }
 
   private normalize(

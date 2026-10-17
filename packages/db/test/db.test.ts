@@ -610,6 +610,22 @@ describe('Db', () => {
     db.close();
   });
 
+  it('moves a ref to the conversation its tab went on to', () => {
+    const db = fresh();
+    const t = db.createTrack({ title: 'x', agent: 'hermes' });
+    db.addRef({
+      trackId: t.id,
+      kind: 'claude_session',
+      externalId: 'hermes:key1',
+      agentSessionId: '20261015_104703_70afc0',
+    });
+    expect(db.moveRefAgentSessionId('hermes:key1', '20261016_211758_17a32a')).toEqual([t.id]);
+    expect(db.listSessionRefs()[0]?.agentSessionId).toBe('20261016_211758_17a32a');
+    // Already there: nothing changed, so no track is touched.
+    expect(db.moveRefAgentSessionId('hermes:key1', '20261016_211758_17a32a')).toEqual([]);
+    db.close();
+  });
+
   it('keeps a discovered id when the session ref is written again', () => {
     // addRef doubles as an upsert on every poll that re-links a session; the id
     // it does not know must not erase the one we found.

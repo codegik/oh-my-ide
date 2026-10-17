@@ -215,6 +215,17 @@ async function syncSessions(): Promise<NormalizedSession[]> {
      */
     if (s.agentSessionId && !ref.agentSessionId) {
       for (const id of db.setRefAgentSessionId(ref.externalId, s.agentSessionId)) touched.add(id);
+    } else if (
+      s.agent === 'hermes' &&
+      s.agentSessionId &&
+      ref.agentSessionId &&
+      s.agentSessionId !== ref.agentSessionId
+    ) {
+      // The tab's TUI moved on to another conversation (`/new`, a compression):
+      // the ref follows what the pane is showing, or the next poll's
+      // `remember()` would pin the runner back to the closed one.
+      for (const id of db.moveRefAgentSessionId(ref.externalId, s.agentSessionId)) touched.add(id);
+      hermesRunner.remember(sessionIdOf(ref.externalId), s.agentSessionId);
     }
     /**
      * Some agents name their own sessions. Hermes titles one from its first

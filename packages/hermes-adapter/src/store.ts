@@ -212,6 +212,29 @@ export class HermesStore {
   }
 
   /**
+   * The first session after `sinceMs` in a folder, from the same kind of client,
+   * that no other tab has — what a TUI went on to when it closed the session a
+   * tab was showing (`/new`, a context compression) without exiting.
+   */
+  firstAfter(
+    cwd: string,
+    source: string,
+    sinceMs: number,
+    exclude: Set<string>,
+  ): StoreSession | null {
+    const rows = this.all(
+      `${SELECT} WHERE (cwd = ? OR git_repo_root = ?) AND source = ? AND started_at >= ?
+        ORDER BY started_at ASC LIMIT 20`,
+      cwd,
+      cwd,
+      source,
+      sinceMs / 1000,
+    );
+    const r = rows.find((x) => !exclude.has(String(x.id)));
+    return r ? toSession(r) : null;
+  }
+
+  /**
    * The folder the session's shell is in now, as of its last command.
    *
    * The row's own `cwd` is where hermes was launched and stays there when the
@@ -262,6 +285,22 @@ export class HermesStore {
       ids.add(String(r.conversation_id));
     }
     return ids;
+  }
+
+  /**
+   * Which process holds each live turn lease. Hermes writes the holder as
+   * `pid=<n>:pidns=…:turn=…`, so a turn can be traced to the TUI it runs in.
+   */
+  leasePids(now = Date.now()): Map<string, number> {
+    const out = new Map<string, number>();
+    for (const r of this.all(
+      'SELECT conversation_id, holder FROM session_turn_leases WHERE expires_at > ?',
+      now / 1000,
+    )) {
+      const pid = Number(/(?:^|:)pid=(\d+)/.exec(String(r.holder ?? ''))?.[1]);
+      if (pid > 0) out.set(String(r.conversation_id), pid);
+    }
+    return out;
   }
 
   close(): void {

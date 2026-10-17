@@ -416,6 +416,28 @@ export class Db {
     return [...new Set(rows.map((r) => r.track_id))];
   }
 
+  /**
+   * Points a ref at the conversation its session is running NOW — a hermes TUI
+   * can close one conversation and carry on with another in the same tab.
+   * Unlike `setRefAgentSessionId`, this overwrites.
+   */
+  moveRefAgentSessionId(externalId: string, agentSessionId: string): number[] {
+    const rows = this.db
+      .prepare(
+        `SELECT track_id FROM track_ref
+          WHERE kind = 'claude_session' AND external_id = ? AND agent_session_id IS NOT ?`,
+      )
+      .all(externalId, agentSessionId) as { track_id: number }[];
+    if (rows.length === 0) return [];
+    this.db
+      .prepare(
+        `UPDATE track_ref SET agent_session_id = ?, updated_at = ?
+          WHERE kind = 'claude_session' AND external_id = ? AND agent_session_id IS NOT ?`,
+      )
+      .run(agentSessionId, Date.now(), externalId, agentSessionId);
+    return [...new Set(rows.map((r) => r.track_id))];
+  }
+
   setRefLabel(refId: number, label: string): void {
     this.db
       .prepare('UPDATE track_ref SET label = ?, updated_at = ? WHERE id = ?')

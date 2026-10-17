@@ -37,6 +37,17 @@ vi.mock('../src/cli.js', async (orig) => ({
   hermesBin: () => '/home/me/.local/bin/hermes',
 }));
 
+/** pid → parent pid, standing in for /proc. */
+const parents = new Map<number, number>();
+vi.mock('../src/proc.js', () => ({
+  descendsFrom: (pid: number, ancestor: number) => {
+    for (let p: number | undefined = pid; p !== undefined; p = parents.get(p)) {
+      if (p === ancestor) return true;
+    }
+    return false;
+  },
+}));
+
 const { HermesRunner } = await import('../src/runner.js');
 const { readMarker } = await import('../src/store.js');
 vi.mock('../src/store.js', async (orig) => ({
@@ -79,6 +90,7 @@ function fakeStore(
     busy?: string[];
     shell?: Record<string, string>;
     reply?: Record<string, string>;
+    leases?: Record<string, number>;
   } = {},
 ) {
   const rows = o.rows ?? [];
@@ -88,6 +100,13 @@ function fakeStore(
     byAnyId: (ids: string[]) => rows.find((r) => ids.includes(r.id)) ?? null,
     inFolder: (cwd: string) => rows.filter((r) => r.cwd === cwd || r.gitRepoRoot === cwd),
     newestIn: () => null,
+    firstAfter: (cwd: string, source: string, since: number, exclude: Set<string>) =>
+      rows
+        .filter(
+          (r) => r.cwd === cwd && r.source === source && r.startedAt >= since && !exclude.has(r.id),
+        )
+        .sort((a, b) => a.startedAt - b.startedAt)[0] ?? null,
+    leasePids: () => new Map(Object.entries(o.leases ?? {})),
     shellCwd: (id: string) => o.shell?.[id] ?? null,
     lastReply: (id: string) => o.reply?.[id] ?? null,
     busyIds: () => new Set(o.busy ?? []),
@@ -185,6 +204,58 @@ describe('list', () => {
     const store = fakeStore({ rows: [row()], busy: [HID], reply: { [HID]: 'Want me to?' } });
     const [s] = await new HermesRunner(store).list();
     expect(s?.state).toBe('WORKING');
+  });
+
+  describe('a tab whose TUI moved on to another conversation', () => {
+    const OLD = '20261015_104703_70afc0';
+    const NEW = '20261016_211758_17a32a';
+    const OTHER = '20261016_221644_de9c18'; // a second tab in the same folder
+    const sessions = [
+      row({ id: OLD, source: 'tui', startedAt: 1_000_000, endedAt: 2_000_000 }),
+      row({ id: NEW, source: 'tui', startedAt: 2_060_000, title: 'Renomear creditados' }),
+      row({ id: OTHER, source: 'tui', startedAt: 9_000_000, title: 'Fix promote.sh' }),
+    ];
+    const tabs = () => [
+      tmuxRow(),
+      tmuxRow({ name: 'omi-h-key2', key: 'key2', tty: '/dev/pts/8', pid: 654 }),
+    ];
+
+    beforeEach(() => parents.clear());
+
+    it('follows a turn lease held under its own pane, and shows that turn', async () => {
+      listSessions.mockResolvedValue(tabs());
+      parents.set(24587, 24576).set(24576, 321); // gateway → TUI → pane
+      const store = fakeStore({ rows: sessions, busy: [NEW], leases: { [NEW]: 24587 } });
+      const r = new HermesRunner(store);
+      r.remember('key1', OLD);
+      r.remember('key2', OTHER);
+      const [one] = await r.list();
+      expect(one).toMatchObject({
+        agentSessionId: NEW,
+        state: 'WORKING',
+        name: 'Renomear creditados',
+      });
+    });
+
+    it('between turns, goes from the closed conversation to the next one, not another tab’s', async () => {
+      listSessions.mockResolvedValue(tabs());
+      const r = new HermesRunner(fakeStore({ rows: sessions }));
+      r.remember('key1', OLD);
+      r.remember('key2', OTHER);
+      const [one, two] = await r.list();
+      expect(one?.agentSessionId).toBe(NEW);
+      expect(two?.agentSessionId).toBe(OTHER);
+    });
+
+    it('a lease from another pane is not ours', async () => {
+      listSessions.mockResolvedValue(tabs());
+      parents.set(777, 654);
+      const live = sessions.map((s) => (s.id === OLD ? { ...s, endedAt: null } : s));
+      const r = new HermesRunner(fakeStore({ rows: live, busy: [NEW], leases: { [NEW]: 777 } }));
+      r.remember('key1', OLD);
+      const [one] = await r.list();
+      expect(one).toMatchObject({ agentSessionId: OLD, state: 'IDLE' });
+    });
   });
 
   it('a finished question or any other tool keeps the turn WORKING', async () => {
